@@ -1,0 +1,265 @@
+# Scintilla - IgniteTech's federated search & chat tool
+# Comprehensive .gitignore for Python/FastAPI backend + React frontend
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# =============================================================================
+# FastAPI / Web Development
+# =============================================================================
+# Environment variables (CRITICAL - contains API keys!)
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.staging
+
+# Session files
+flask_session/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# =============================================================================
+# Database
+# =============================================================================
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# PostgreSQL
+*.dump
+*.sql
+
+# Database migration temp files
+*_backup.sql
+*.backup
+
+# =============================================================================
+# Node.js / React (for future frontend)
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Next.js build output
+.next/
+out/
+
+# React build output
+build/
+
+# =============================================================================
+# AWS / Cloud
+# =============================================================================
+# AWS credentials and config
+.aws/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# CDK
+cdk.out/
+.cdk.staging/
+
+# Docker
+.dockerignore
+
+# =============================================================================
+# Development Tools
+# =============================================================================
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Black
+.black
+
+# Rope
+.ropeproject
+
+# =============================================================================
+# Operating System
+# =============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Logs
+# =============================================================================
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# =============================================================================
+# Security & Secrets
+# =============================================================================
+# API keys and secrets
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# OAuth tokens
+token.json
+.credentials/
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+# Local development files
+temp/
+tmp/
+scratch/
+
+# Documentation builds
+docs/_build/
+site/
+
+# Local uploads/media
+uploads/
+media/
+
+# Cache directories
+.cache/
+cache/
+
+# Backup files
+*.bak
+*.backup
+
+# =============================================================================
+# Docker
+# =============================================================================
+# Override docker-compose files
+docker-compose.override.yml
+
+# =============================================================================
+# Deployment
+# =============================================================================
+# Deployment artifacts
+deployment/
+deploy/
+
+# CI/CD
+.github/workflows/secrets/ 

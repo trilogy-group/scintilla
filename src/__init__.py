@@ -1,0 +1,1 @@
+# Scintilla - IgniteTech's federated search & chat tool 

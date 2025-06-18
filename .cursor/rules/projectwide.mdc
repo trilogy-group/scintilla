@@ -1,0 +1,82 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Scintilla – .cursorrules (v2)
+
+Guidelines for Cursor AI when creating or editing code in this repository.  Everything here is a **preference**, not an iron‑clad rule.  Favour clarity and simplicity over rigid conventions.
+
+## Project overview
+
+Scintilla is IgniteTech’s in‑house federated search & chat tool.  It signs users in with Google OAuth, gathers MCP tools from Hive workspaces (user + selected bots), lets LangChain choose which tools to call, and streams answers back to the browser.
+
+## Tech snapshot
+
+| Layer             | Preferred choice                                           | Notes                       |
+| ----------------- | ---------------------------------------------------------- | --------------------------- |
+| Runtime           | **Python **                                            | Async‑friendly.             |
+| API               | **FastAPI**                                                | REST + SSE.                 |
+| LLM orchestration | **LangChain** (function‑calling agent)                     | **No LangGraph** for now.   |
+| DB                | **PostgreSQL**                            | RDS|
+| Secrets           | **AWS KMS** envelope encryption                            | Protect Hive workspace key. |
+| Hosting           | **EC2 Auto‑Scaling Group** + **Application Load Balancer** | No EKS / k8s.               |
+| Front‑end         | **React (Vite)**                                           | Lightweight SPA.            |
+
+Feel free to swap out small libraries if it simplifies the code—just document the change.
+
+## Directory sketch (not strict)
+
+```
+src/            # backend code
+src/api/        # FastAPI routes
+src/agents/     # LangChain logic
+src/db/         # models and migrations
+infra/          # Terraform or CloudFormation
+web/            # React front‑end
+```
+
+## Style hints
+
+* Follow PEP8 **where practical**; run `black` if it helps.
+* Type hints are **encouraged** but may be skipped for very small helpers.
+* Avoid over–abstracted patterns (CQRS, DDD, etc.). Plain classes and functions are fine.
+
+## FastAPI
+
+* Central app lives in `src/main.py`.
+* **/query** → `POST` returning `text/event-stream`.
+* Use dependency injection for DB sessions & KMS client when convenient—otherwise import directly.
+
+## Database
+
+* Use Alembic for migrations, but raw SQL is OK for quick patches.
+* JSONB fields (`sse_urls`, `citations`) for flexible data blobs.
+* PKs: UUID (users, conversations) or BIGSERIAL (messages).
+
+## LangChain
+
+* Build tools each request with `load_mcp_tools(urls)`.
+* No caching of embeddings or tool lists yet.
+* Keep agent logic in `src/agents/mcp_agent.py`.
+
+## Security basics
+
+* Validate Google ID‑token (`iss`, `aud`, `exp`, `hd`).  Accept only *@ignitetech.com* and *@ignitetech.ai*.
+* Decrypt Hive workspace key via KMS; zero plaintext variable after use.
+* Keep secrets in env vars (`OPENAI_API_KEY`, `DATABASE_URL`, etc.).
+
+## Testing
+
+* `pytest` + `pytest‑asyncio`.
+* Provide a minimal fake MCP server for unit tests.
+
+## Out of scope (for now)
+
+* Kubernetes / EKS.
+* LangGraph.
+* Elaborate micro‑service splits.
+
+---
+
+Cursor: treat these points as friendly guard‑rails, not strict gates.
