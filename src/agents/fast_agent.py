@@ -121,61 +121,6 @@ class FastMCPAgent:
         
         return source_ids
     
-    def is_meta_query(self, message: str) -> bool:
-        """Detect meta queries about the system itself"""
-        meta_patterns = [
-            "what tools", "what can you do", "what are you capable of",
-            "list tools", "available tools", "help", "what functions",
-            "what commands", "show me tools", "what do you have access to"
-        ]
-        message_lower = message.lower().strip()
-        return any(pattern in message_lower for pattern in meta_patterns)
-    
-    def generate_meta_response(self) -> str:
-        """Generate response for meta queries"""
-        if not self.tools:
-            return """I don't currently have access to any tools or knowledge sources. 
-
-To get started:
-1. Configure sources in the Sources tab
-2. Create/mention bots with knowledge sources
-3. Ask questions that require searching
-
-Once configured, I'll help you search your knowledge bases."""
-
-        # Group tools by source
-        tools_by_source = {}
-        for i, tool in enumerate(self.tools):
-            source_name = "Unknown Source"
-            if i < len(self._tool_metadata):
-                source_name = self._tool_metadata[i].get("source_name", source_name)
-            
-            if source_name not in tools_by_source:
-                tools_by_source[source_name] = []
-            tools_by_source[source_name].append({
-                "name": tool.name,
-                "description": tool.description
-            })
-        
-        response = f"I have access to **{len(self.tools)} tools** from **{len(self.loaded_sources)} sources**:\n\n"
-        
-        for source_name, tools in tools_by_source.items():
-            response += f"**{source_name}:**\n"
-            for tool in tools[:5]:  # Show max 5 per source
-                response += f"- `{tool['name']}`: {tool['description']}\n"
-            if len(tools) > 5:
-                response += f"- ... and {len(tools) - 5} more tools\n"
-            response += "\n"
-        
-        response += """**Example queries:**
-- "Search for information about [topic]"
-- "Find documentation on [feature]"
-- "@[botname] what is [question]"
-
-Just ask me anything!"""
-        
-        return response
-    
     def filter_search_tools(self) -> List[BaseTool]:
         """Filter to search/read-only tools"""
         return filter_search_tools(self.tools)
@@ -237,30 +182,38 @@ Just ask me anything!"""
         tools_context = "\n".join(tools_info)
         server_context = ", ".join(self.loaded_sources)
         
-        return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant.
+        return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
-CRITICAL CITATION REQUIREMENTS:
-- ALWAYS cite sources using [1], [2], [3] format
-- Place citations immediately after relevant information
-- Include <SOURCES> section at end with proper URLs
+DECISION MATRIX - When to use tools vs respond directly:
 
-Available search tools ({len(search_tools)} tools):
+USE TOOLS when users ask about:
+- Specific information that needs searching ("What is Eloquens?", "How does X work?")
+- Technical documentation or implementation details
+- Recent updates, changes, or current status
+- Specific files, documents, or code repositories
+- Troubleshooting or configuration help
+- Any query requiring factual information from knowledge bases
+
+RESPOND DIRECTLY for:
+- General capability questions ("What can you do?", "What tools do you have?")
+- Simple explanations of basic concepts
+- Requests for help or guidance on using the system
+- Meta questions about your functions
+
+AVAILABLE SEARCH TOOLS ({len(search_tools)} tools):
 {tools_context}
 
-Connected sources: {server_context}
+CITATION REQUIREMENTS (only when using tools):
+- ALWAYS cite sources using [1], [2], [3] format immediately after relevant information
+- ONLY cite information that came from actual tool results
+- Each tool call result gets its own citation number in order of tool execution
+- Do NOT create citations for information you don't have tool results for
+- I will provide a comprehensive Sources section automatically - do NOT add your own <SOURCES> section
 
-Approach:
-1. Use relevant search tools for user's query
-2. Extract URLs/IDs from tool results
-3. Create proper citations [1], [2], [3] in text
-4. Include Sources section with this format:
+CAPABILITY RESPONSE (when asked what you can do):
+"I have access to {len(search_tools)} search tools from {len(self.loaded_sources)} knowledge sources. I can help you find information about technical documentation, code repositories, project details, and more. Just ask me specific questions about topics you're interested in!"
 
-<SOURCES>
-[1] [Document Title](https://docs.google.com/document/d/FILE_ID/edit)
-[2] [Repository Name](https://github.com/user/repo)
-</SOURCES>
-
-Always use search tools and cite sources properly."""
+Be intelligent about tool usage - search when information is needed, respond directly when appropriate."""
 
     async def _execute_tool_calls(
         self, 
@@ -333,24 +286,6 @@ Always use search tools and cite sources properly."""
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Execute query with streaming response"""
         query_start = time.time()
-        
-        # Handle meta queries
-        if self.is_meta_query(message):
-            yield {
-                "type": "final_response",
-                "content": self.generate_meta_response(),
-                "tool_calls": [],
-                "tools_available": len(self.tools),
-                "servers_connected": len(self.loaded_sources),
-                "sources": [],
-                "processing_stats": {
-                    "total_tools_called": 0,
-                    "query_type": "meta",
-                    "response_time_ms": int((time.time() - query_start) * 1000),
-                    "sources_found": 0
-                }
-            }
-            return
         
         # Validate tools available
         if not self.tools:
@@ -439,7 +374,11 @@ Always use search tools and cite sources properly."""
             if iteration >= MAX_TOOL_ITERATIONS:
                 final_content = getattr(response, 'content', "Maximum iterations reached")
             
-            # Add citation references
+            # Remove LLM's basic <SOURCES> section and add our comprehensive one
+            import re
+            final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
+            
+            # Add our comprehensive citation references
             reference_list = self.citation_manager.generate_reference_list()
             if reference_list:
                 final_content += f"\n\n{reference_list}"

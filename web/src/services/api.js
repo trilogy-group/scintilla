@@ -145,7 +145,11 @@ class APIService {
     })
   }
 
-
+  async refreshCache() {
+    return this.request('/api/sources/refresh-cache', {
+      method: 'POST'
+    })
+  }
 
   async refreshSourceTools(sourceId) {
     return this.request(`/api/sources/${sourceId}/refresh-tools`, {

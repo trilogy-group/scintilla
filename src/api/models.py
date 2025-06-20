@@ -139,6 +139,12 @@ class SourceResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime]
+    # Tool information
+    tools_cache_status: Optional[str] = None  # "pending", "cached", "error", "caching"
+    tools_last_cached_at: Optional[datetime] = None
+    tools_cache_error: Optional[str] = None
+    cached_tool_count: Optional[int] = None
+    cached_tools: Optional[List[str]] = None  # List of tool names
 
 
 class BotWithSourcesResponse(BotResponse):

@@ -345,7 +345,7 @@ class ContentProcessor:
                     "result": result
                 }
             
-            extracted_sources = SourceExtractor.extract_from_tool_result(tool_name, tool_result_for_extraction)
+            extracted_sources = SourceExtractor.extract_from_tool_result(tool_name, tool_result_for_extraction, tool_params)
             if extracted_sources:
                 citation_numbers = citation_manager.add_sources(extracted_sources)
                 sources = [source.to_dict() for source in extracted_sources]
@@ -423,7 +423,7 @@ class ContentProcessor:
             }
     
     @staticmethod
-    def process_tool_result(tool_name: str, result: Any, query_context: str = "", citation_manager: CitationManager = None) -> Dict[str, Any]:
+    def process_tool_result(tool_name: str, result: Any, query_context: str = "", citation_manager: CitationManager = None, tool_params: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process tool result with appropriate truncation strategy and source extraction
         
@@ -432,6 +432,7 @@ class ContentProcessor:
             result: Raw tool result
             query_context: User query for context
             citation_manager: Citation manager for source tracking
+            tool_params: Tool parameters (like file_id for read operations)
             
         Returns:
             Processed result with truncation metadata and citations
@@ -454,7 +455,7 @@ class ContentProcessor:
                     "result": result
                 }
             
-            extracted_sources = SourceExtractor.extract_from_tool_result(tool_name, tool_result_for_extraction)
+            extracted_sources = SourceExtractor.extract_from_tool_result(tool_name, tool_result_for_extraction, tool_params)
             if extracted_sources:
                 citation_numbers = citation_manager.add_sources(extracted_sources)
                 sources = [source.to_dict() for source in extracted_sources]
@@ -1638,7 +1639,7 @@ Please provide a thorough response based on searching our knowledge bases with m
             # Process the result with intelligent truncation and source extraction
             processing_start = time.time()
             processed_result = ContentProcessor.process_tool_result(
-                tool_name, raw_result, query_context, citation_manager
+                tool_name, raw_result, query_context, citation_manager, kwargs
             )
             processing_time = (time.time() - processing_start) * 1000
             

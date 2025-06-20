@@ -56,20 +56,27 @@ async def query_endpoint(
                 user_message=request.message
             )
             
+            # Capture final chunk for saving
+            final_chunk = None
+            
             # Handle the query based on mode
             if TEST_MODE:
                 async for chunk in query_handler.handle_test_query(request, conversation.conversation_id):
+                    if chunk.get("type") == "final_response":
+                        final_chunk = chunk
                     yield await format_sse_chunk(chunk)
             else:
                 async for chunk in query_handler.handle_production_query(request, conversation.conversation_id):
+                    if chunk.get("type") == "final_response":
+                        final_chunk = chunk
                     yield await format_sse_chunk(chunk)
                     
-            # Save conversation in background
+            # Save conversation in background with captured final chunk
             background_tasks.add_task(
                 conversation_manager.save_conversation_background,
                 request=request,
                 conversation_id=conversation.conversation_id,
-                final_chunk=None  # TODO: Pass final response for saving
+                final_chunk=final_chunk
             )
             
         except Exception as e:

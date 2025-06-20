@@ -105,21 +105,31 @@ async def create_source(
     )
     
     # Asynchronously cache tools for this source (don't block the response)
-    try:
-        cache_result = await ToolCacheService.cache_tools_for_source(db, source_id)
-        if cache_result["success"]:
-            logger.info("Tools cached for new source", 
-                       source_id=source_id, 
-                       tool_count=cache_result["cached_tools"],
-                       cache_time_ms=cache_result["cache_time_ms"])
-        else:
-            logger.warning("Failed to cache tools for new source",
+    async def _cache_tools_background():
+        """Background task to cache tools without blocking the API response"""
+        try:
+            # Use a new database session for background task
+            from src.db.base import get_db_session
+            async for background_db in get_db_session():
+                cache_result = await ToolCacheService.cache_tools_for_source(background_db, source_id)
+                if cache_result["success"]:
+                    logger.info("Tools cached for new source", 
+                               source_id=source_id, 
+                               tool_count=cache_result["cached_tools"],
+                               cache_time_ms=cache_result["cache_time_ms"])
+                else:
+                    logger.warning("Failed to cache tools for new source",
+                                  source_id=source_id,
+                                  error=cache_result["error"])
+                break
+        except Exception as e:
+            logger.warning("Tool caching failed for new source",
                           source_id=source_id,
-                          error=cache_result["error"])
-    except Exception as e:
-        logger.warning("Tool caching failed for new source",
-                      source_id=source_id,
-                      error=str(e))
+                          error=str(e))
+    
+    # Start background task without waiting for it
+    import asyncio
+    asyncio.create_task(_cache_tools_background())
     
     return SourceResponse(
         source_id=source_id,
@@ -132,7 +142,12 @@ async def create_source(
         owner_bot_id=None,
         is_active=True,
         created_at=created_at,
-        updated_at=created_at
+        updated_at=created_at,
+        tools_cache_status="pending",  # Initial status
+        tools_last_cached_at=None,
+        tools_cache_error=None,
+        cached_tool_count=0,
+        cached_tools=[]
     )
 
 
@@ -141,7 +156,7 @@ async def list_user_sources(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """List sources owned by the current user"""
+    """List sources owned by the current user with tool information"""
     
     query = select(Source).where(
         Source.owner_user_id == user.user_id,
@@ -151,22 +166,59 @@ async def list_user_sources(
     result = await db.execute(query)
     sources = result.scalars().all()
     
-    return [
-        SourceResponse(
-            source_id=source.source_id,
-            name=source.name,
-            description=source.description,
-            instructions=source.instructions,
-            server_type=source.server_type.value,
-            server_url=source.server_url,
-            owner_user_id=source.owner_user_id,
-            owner_bot_id=source.owner_bot_id,
-            is_active=source.is_active,
-            created_at=source.created_at,
-            updated_at=source.updated_at
-        )
-        for source in sources
-    ]
+    source_responses = []
+    
+    for source in sources:
+        # Extract ALL source attributes early to avoid greenlet issues
+        source_id = source.source_id
+        source_name = source.name
+        source_description = source.description
+        source_instructions = source.instructions
+        source_server_type = source.server_type
+        source_server_url = source.server_url
+        source_owner_user_id = source.owner_user_id
+        source_owner_bot_id = source.owner_bot_id
+        source_is_active = source.is_active
+        source_created_at = source.created_at
+        source_updated_at = source.updated_at
+        source_tools_cache_status = source.tools_cache_status
+        source_tools_last_cached_at = source.tools_last_cached_at
+        source_tools_cache_error = source.tools_cache_error
+        
+        # Get cached tools for this source
+        cached_tools = []
+        cached_tool_count = 0
+        
+        try:
+            from src.db.tool_cache import ToolCacheService
+            tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
+            if tools_data:
+                cached_tools = [tool["name"] for tool in tools_data]
+                cached_tool_count = len(cached_tools)
+        except Exception as e:
+            logger.warning("Failed to get cached tools for source", 
+                          source_id=source_id, error=str(e))
+        
+        source_responses.append(SourceResponse(
+            source_id=source_id,
+            name=source_name,
+            description=source_description,
+            instructions=source_instructions,
+            server_type=source_server_type.value,
+            server_url=source_server_url,
+            owner_user_id=source_owner_user_id,
+            owner_bot_id=source_owner_bot_id,
+            is_active=source_is_active,
+            created_at=source_created_at,
+            updated_at=source_updated_at,
+            tools_cache_status=source_tools_cache_status,
+            tools_last_cached_at=source_tools_last_cached_at,
+            tools_cache_error=source_tools_cache_error,
+            cached_tool_count=cached_tool_count,
+            cached_tools=cached_tools
+        ))
+    
+    return source_responses
 
 
 @router.get("/sources/{source_id}", response_model=SourceResponse)
@@ -175,7 +227,7 @@ async def get_source(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Get a specific source owned by the current user"""
+    """Get a specific source owned by the current user with tool information"""
     
     query = select(Source).where(
         Source.source_id == source_id,
@@ -191,18 +243,53 @@ async def get_source(
             detail="Source not found"
         )
     
+    # Extract ALL source attributes early to avoid greenlet issues
+    source_source_id = source.source_id
+    source_name = source.name
+    source_description = source.description
+    source_instructions = source.instructions
+    source_server_type = source.server_type
+    source_server_url = source.server_url
+    source_owner_user_id = source.owner_user_id
+    source_owner_bot_id = source.owner_bot_id
+    source_is_active = source.is_active
+    source_created_at = source.created_at
+    source_updated_at = source.updated_at
+    source_tools_cache_status = source.tools_cache_status
+    source_tools_last_cached_at = source.tools_last_cached_at
+    source_tools_cache_error = source.tools_cache_error
+    
+    # Get cached tools for this source
+    cached_tools = []
+    cached_tool_count = 0
+    
+    try:
+        from src.db.tool_cache import ToolCacheService
+        tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_source_id])
+        if tools_data:
+            cached_tools = [tool["name"] for tool in tools_data]
+            cached_tool_count = len(cached_tools)
+    except Exception as e:
+        logger.warning("Failed to get cached tools for source", 
+                      source_id=source_source_id, error=str(e))
+    
     return SourceResponse(
-        source_id=source.source_id,
-        name=source.name,
-        description=source.description,
-        instructions=source.instructions,
-        server_type=source.server_type.value,
-        server_url=source.server_url,
-        owner_user_id=source.owner_user_id,
-        owner_bot_id=source.owner_bot_id,
-        is_active=source.is_active,
-        created_at=source.created_at,
-        updated_at=source.updated_at
+        source_id=source_source_id,
+        name=source_name,
+        description=source_description,
+        instructions=source_instructions,
+        server_type=source_server_type.value,
+        server_url=source_server_url,
+        owner_user_id=source_owner_user_id,
+        owner_bot_id=source_owner_bot_id,
+        is_active=source_is_active,
+        created_at=source_created_at,
+        updated_at=source_updated_at,
+        tools_cache_status=source_tools_cache_status,
+        tools_last_cached_at=source_tools_last_cached_at,
+        tools_cache_error=source_tools_cache_error,
+        cached_tool_count=cached_tool_count,
+        cached_tools=cached_tools
     )
 
 
@@ -239,6 +326,9 @@ async def update_source(
     original_owner_bot_id = source.owner_bot_id
     original_is_active = source.is_active
     original_created_at = source.created_at
+    original_tools_cache_status = source.tools_cache_status
+    original_tools_last_cached_at = source.tools_last_cached_at
+    original_tools_cache_error = source.tools_cache_error
     
     # Update fields
     updated_at = datetime.utcnow()
@@ -272,26 +362,50 @@ async def update_source(
     
     # If credentials were updated, refresh the tool cache
     if credentials_updated:
-        try:
-            cache_result = await ToolCacheService.cache_tools_for_source(db, source_id, force_refresh=True)
-            if cache_result["success"]:
-                logger.info("Tools refreshed for updated source", 
-                           source_id=source_id, 
-                           tool_count=cache_result["cached_tools"],
-                           cache_time_ms=cache_result["cache_time_ms"])
-            else:
-                logger.warning("Failed to refresh tools for updated source",
+        async def _refresh_tools_background():
+            """Background task to refresh tools without blocking the API response"""
+            try:
+                # Use a new database session for background task
+                from src.db.base import get_db_session
+                async for background_db in get_db_session():
+                    cache_result = await ToolCacheService.cache_tools_for_source(background_db, source_id, force_refresh=True)
+                    if cache_result["success"]:
+                        logger.info("Tools refreshed for updated source", 
+                                   source_id=source_id, 
+                                   tool_count=cache_result["cached_tools"],
+                                   cache_time_ms=cache_result["cache_time_ms"])
+                    else:
+                        logger.warning("Failed to refresh tools for updated source",
+                                      source_id=source_id,
+                                      error=cache_result["error"])
+                    break
+            except Exception as e:
+                logger.warning("Tool refresh failed for updated source",
                               source_id=source_id,
-                              error=cache_result["error"])
-        except Exception as e:
-            logger.warning("Tool refresh failed for updated source",
-                          source_id=source_id,
-                          error=str(e))
+                              error=str(e))
+        
+        # Start background task without waiting for it
+        import asyncio
+        asyncio.create_task(_refresh_tools_background())
     
     # Use captured or updated values
     final_name = source_data.name if source_data.name is not None else original_name
     final_description = source_data.description if source_data.description is not None else original_description
     final_instructions = source_data.instructions if source_data.instructions is not None else original_instructions
+    
+    # Get current tool information after update
+    cached_tools = []
+    cached_tool_count = 0
+    
+    try:
+        from src.db.tool_cache import ToolCacheService
+        tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
+        if tools_data:
+            cached_tools = [tool["name"] for tool in tools_data]
+            cached_tool_count = len(cached_tools)
+    except Exception as e:
+        logger.warning("Failed to get cached tools for updated source", 
+                      source_id=source_id, error=str(e))
     
     logger.info(
         "Source updated",
@@ -311,7 +425,12 @@ async def update_source(
         owner_bot_id=original_owner_bot_id,
         is_active=original_is_active,
         created_at=original_created_at,
-        updated_at=updated_at
+        updated_at=updated_at,
+        tools_cache_status="caching" if credentials_updated else original_tools_cache_status,
+        tools_last_cached_at=original_tools_last_cached_at,
+        tools_cache_error=None if credentials_updated else original_tools_cache_error,
+        cached_tool_count=cached_tool_count,
+        cached_tools=cached_tools
     )
 
 
@@ -451,10 +570,25 @@ async def test_source_connection(
         if server_configs:
             from langchain_mcp_adapters.client import MultiServerMCPClient
             import time
+            import asyncio
             
             start_time = time.time()
             test_client = MultiServerMCPClient(server_configs)
-            tools = await test_client.get_tools()
+            
+            # Add timeout to prevent hanging on get_tools call
+            try:
+                tools = await asyncio.wait_for(
+                    test_client.get_tools(),
+                    timeout=30  # 30 second timeout for connection test
+                )
+            except asyncio.TimeoutError:
+                return {
+                    "success": False,
+                    "message": "Connection test timed out after 30 seconds",
+                    "tool_count": 0,
+                    "response_time_ms": 30000
+                }
+            
             end_time = time.time()
             
             response_time = int((end_time - start_time) * 1000)

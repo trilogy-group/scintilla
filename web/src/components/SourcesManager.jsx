@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Settings, Trash2, TestTube, CheckCircle, AlertCircle, Loader, RefreshCw } from 'lucide-react'
+import { Plus, Settings, Trash2, TestTube, CheckCircle, AlertCircle, Loader, RefreshCw, ChevronDown, ChevronRight, Wrench, Clock, AlertTriangle } from 'lucide-react'
 import api from '../services/api'
 
 export const SourcesManager = () => {
@@ -9,6 +9,8 @@ export const SourcesManager = () => {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [testingSource, setTestingSource] = useState(null)
   const [refreshingCache, setRefreshingCache] = useState(false)
+  const [expandedTools, setExpandedTools] = useState({}) // Track which source tools are expanded
+  const [refreshingSource, setRefreshingSource] = useState(null) // Track which source is being refreshed
 
   // Form state
   const [formData, setFormData] = useState({
@@ -185,6 +187,60 @@ export const SourcesManager = () => {
       alert('Connection test failed: ' + err.message)
     } finally {
       setTestingSource(null)
+    }
+  }
+
+  const getToolStatusColor = (status) => {
+    switch (status) {
+      case 'cached':
+        return 'text-green-600 dark:text-green-400'
+      case 'caching':
+        return 'text-blue-600 dark:text-blue-400'
+      case 'pending':
+        return 'text-yellow-600 dark:text-yellow-400'
+      case 'error':
+        return 'text-red-600 dark:text-red-400'
+      default:
+        return 'text-gray-500 dark:text-gray-400'
+    }
+  }
+
+  const getToolStatusIcon = (status) => {
+    switch (status) {
+      case 'cached':
+        return <CheckCircle className="h-4 w-4" />
+      case 'caching':
+        return <Loader className="h-4 w-4 animate-spin" />
+      case 'pending':
+        return <Clock className="h-4 w-4" />
+      case 'error':
+        return <AlertTriangle className="h-4 w-4" />
+      default:
+        return <Wrench className="h-4 w-4" />
+    }
+  }
+
+  const toggleToolsExpansion = (sourceId) => {
+    setExpandedTools(prev => ({
+      ...prev,
+      [sourceId]: !prev[sourceId]
+    }))
+  }
+
+  const handleRefreshSourceTools = async (sourceId) => {
+    try {
+      setRefreshingSource(sourceId)
+      const result = await api.refreshSourceTools(sourceId)
+      if (result.success) {
+        alert(`Tools refreshed! Found ${result.cached_tools} tools.`)
+        await loadSources() // Reload to get updated tool information
+      } else {
+        alert('Failed to refresh tools: ' + result.message)
+      }
+    } catch (err) {
+      alert('Failed to refresh tools: ' + err.message)
+    } finally {
+      setRefreshingSource(null)
     }
   }
 
@@ -411,6 +467,18 @@ export const SourcesManager = () => {
               </div>
               <div className="flex items-center space-x-2">
                 <button
+                  onClick={() => handleRefreshSourceTools(source.source_id)}
+                  disabled={refreshingSource === source.source_id}
+                  className="p-2 text-gray-400 hover:text-blue-500 transition-colors disabled:opacity-50"
+                  title="Refresh tools"
+                >
+                  {refreshingSource === source.source_id ? (
+                    <Loader className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                </button>
+                <button
                   onClick={() => handleTestSource(source.source_id)}
                   disabled={testingSource === source.source_id}
                   className="p-2 text-gray-400 hover:text-scintilla-500 transition-colors disabled:opacity-50"
@@ -461,6 +529,75 @@ export const SourcesManager = () => {
                   {new Date(source.created_at).toLocaleDateString()}
                 </span>
               </div>
+            </div>
+
+            {/* Tool Information Section */}
+            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center space-x-2">
+                  <span className={`flex items-center space-x-1 text-sm ${getToolStatusColor(source.tools_cache_status)}`}>
+                    {getToolStatusIcon(source.tools_cache_status)}
+                    <span className="capitalize">
+                      {source.tools_cache_status || 'Unknown'} Tools
+                    </span>
+                  </span>
+                  {source.cached_tool_count > 0 && (
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      ({source.cached_tool_count} tools)
+                    </span>
+                  )}
+                </div>
+                
+                {/* Tools toggle button */}
+                {source.cached_tools && source.cached_tools.length > 0 && (
+                  <button
+                    onClick={() => toggleToolsExpansion(source.source_id)}
+                    className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    {expandedTools[source.source_id] ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3" />
+                    )}
+                    <span>Tools</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Tool cache timestamp */}
+              {source.tools_last_cached_at && (
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  Last cached: {new Date(source.tools_last_cached_at).toLocaleString()}
+                </div>
+              )}
+
+              {/* Tool cache error */}
+              {source.tools_cache_error && (
+                <div className="text-xs text-red-600 dark:text-red-400 mb-2 p-2 bg-red-50 dark:bg-red-900/20 rounded">
+                  Error: {source.tools_cache_error}
+                </div>
+              )}
+
+              {/* Expanded tools list */}
+              {expandedTools[source.source_id] && source.cached_tools && source.cached_tools.length > 0 && (
+                <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded text-xs">
+                  <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">Available Tools:</div>
+                  <div className="grid grid-cols-1 gap-1">
+                    {source.cached_tools.map((toolName, index) => (
+                      <div key={index} className="font-mono text-gray-600 dark:text-gray-400">
+                        • {toolName}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* No tools message */}
+              {source.tools_cache_status === 'cached' && (!source.cached_tools || source.cached_tools.length === 0) && (
+                <div className="text-xs text-yellow-600 dark:text-yellow-400">
+                  No tools available from this source
+                </div>
+              )}
             </div>
 
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">

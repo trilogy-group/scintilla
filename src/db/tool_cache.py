@@ -112,7 +112,15 @@ class ToolCacheService:
             
             # Get tools from MCP server
             mcp_load_start = time.time()
-            tools = await client.get_tools()
+            try:
+                # Add timeout to prevent hanging on get_tools call
+                tools = await asyncio.wait_for(
+                    client.get_tools(),
+                    timeout=30  # 30 second timeout for get_tools
+                )
+            except asyncio.TimeoutError:
+                raise Exception(f"MCP server get_tools() timed out after 30 seconds for source {source_id}")
+            
             mcp_load_time = (time.time() - mcp_load_start) * 1000
             
             logger.info("Loaded tools from MCP server", 
