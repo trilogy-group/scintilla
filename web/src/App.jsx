@@ -1,17 +1,42 @@
-import { useState, useEffect } from 'react'
-import { Search, Send, Settings, User, BookOpen, Github, Code, Database, MessageSquare, AlertCircle, CheckCircle, RefreshCw, Bot, Server, Clock, Trash2 } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Search, Send, Settings, User, BookOpen, Github, Code, Database, MessageSquare, AlertCircle, CheckCircle, RefreshCw, Bot, Server, Clock, Trash2, Plus, Filter, X } from 'lucide-react'
 import { useScintilla } from './hooks/useScintilla'
+import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from './hooks/useBotAutoComplete.jsx'
 import CitationRenderer from './components/CitationRenderer'
 import { SourcesManager } from './components/SourcesManager'
 import { BotsManager } from './components/BotsManager'
+import LandingPage from './components/LandingPage'
+
 import './App.css'
 import api from './services/api'
 
 function App() {
   const [query, setQuery] = useState('')
   const [currentView, setCurrentView] = useState('chat') // 'chat', 'sources', 'bots'
+  const [showLanding, setShowLanding] = useState(true) // Show landing page initially
   const [conversations, setConversations] = useState([])
   const [conversationSearch, setConversationSearch] = useState('')
+  const [isSearchFocused, setIsSearchFocused] = useState(false)
+  const [searchSuggestions, setSearchSuggestions] = useState([])
+  const [recentSearches, setRecentSearches] = useState(['xinet', 'scintilla architecture', 'bot configuration'])
+  const searchInputRef = useRef(null)
+  
+  // Bot auto-complete functionality
+  const {
+    selectedBots,
+    showBotSuggestions,
+    botSuggestions,
+    selectedSuggestionIndex,
+    inputRef,
+    getBotSelectionData,
+    handleInputChange: handleBotInputChange,
+    selectBotSuggestion,
+    handleKeyDown: handleBotKeyDown,
+    removeSelectedBot,
+    clearSelectedBots,
+    closeSuggestions,
+    loadBots: loadBotsForAutoComplete
+  } = useBotAutoComplete()
   
   const { 
     messages, 
@@ -19,6 +44,7 @@ function App() {
     isConnected, 
     error,
     currentConversationId,
+    isSavingConversation,
     sendMessage, 
     clearMessages,
     retryConnection,
@@ -27,17 +53,10 @@ function App() {
     setConversationCreatedCallback
   } = useScintilla()
 
-  // Set up callback for when new conversations are created
-  useEffect(() => {
-    setConversationCreatedCallback((newConversationId) => {
-      // Refresh conversations list when a new one is created
-      console.log('New conversation created:', newConversationId, 'refreshing list')
-      loadConversations()
-    })
-  }, [setConversationCreatedCallback])
+
 
   // Load previous conversations
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async () => {
     try {
       console.log('Loading conversations...')
       const data = await api.getConversations()
@@ -46,25 +65,113 @@ function App() {
     } catch (error) {
       console.error('Failed to load conversations:', error)
     }
+  }, [])
+
+  // Remove placeholder and refresh when real conversation is created
+  const handleConversationCreated = useCallback((newConversationId) => {
+    console.log('🎉 handleConversationCreated called with:', newConversationId)
+    
+    // Remove any placeholder conversations
+    setConversations(prev => {
+      const placeholders = prev.filter(conv => conv.isPlaceholder)
+      console.log('🗑️ Removing placeholders:', placeholders.length)
+      return prev.filter(conv => !conv.isPlaceholder)
+    })
+    
+    // Refresh to get the real conversation data
+    console.log('🔄 Refreshing conversations list...')
+    loadConversations()
+  }, [loadConversations])
+
+  // Set up callback for when new conversations are created
+  useEffect(() => {
+    console.log('🔗 Setting up conversation created callback')
+    setConversationCreatedCallback(handleConversationCreated)
+  }, [setConversationCreatedCallback, handleConversationCreated])
+
+  // Add placeholder conversation immediately when starting a new conversation
+  const addPlaceholderConversation = (messageContent) => {
+    console.log('🔄 addPlaceholderConversation called:', { messageContent, currentConversationId })
+    
+    if (currentConversationId) {
+      console.log('❌ Skipping placeholder - conversation already exists:', currentConversationId)
+      return // Only for new conversations
+    }
+    
+    const placeholderConversation = {
+      conversation_id: 'temp-' + Date.now(),
+      title: messageContent.slice(0, 50) + (messageContent.length > 50 ? '...' : ''),
+      last_message_preview: messageContent.slice(0, 100) + (messageContent.length > 100 ? '...' : ''),
+      message_count: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      isPlaceholder: true
+    }
+    
+    console.log('✅ Adding placeholder conversation:', placeholderConversation)
+    
+    // Add to the beginning of conversations list
+    setConversations(prev => {
+      console.log('📝 Previous conversations count:', prev.length)
+      const newConversations = [placeholderConversation, ...prev]
+      console.log('📝 New conversations count:', newConversations.length)
+      return newConversations
+    })
   }
 
   useEffect(() => {
     if (currentView === 'chat') {
       console.log('Chat view activated, loading conversations')
       loadConversations()
+      loadBotsForAutoComplete() // Refresh bots for auto-complete
+    } else if (currentView === 'bots') {
+      loadBotsForAutoComplete() // Refresh bots when viewing bots section
     }
-  }, [currentView])
+  }, [currentView, loadBotsForAutoComplete, loadConversations])
+
+  // Handle input change for auto-complete
+  const handleInputChange = (e) => {
+    handleBotInputChange(e, setQuery)
+  }
+
+  // Handle bot suggestion selection
+  const handleSelectBot = (bot) => {
+    selectBotSuggestion(bot, query, setQuery)
+  }
+
+  // Handle keyboard navigation in suggestions
+  const handleKeyDown = (e) => {
+    const result = handleBotKeyDown(e)
+    if (result?.selectBot) {
+      selectBotSuggestion(result.selectBot, query, setQuery)
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!query.trim() || isLoading) return
+    if (!query.trim() || isLoading || isSavingConversation) return
 
-    await sendMessage(query, {
+    // Get clean message and selected bot IDs
+    const { cleanMessage, botIds } = getBotSelectionData(query.trim())
+    const messageToSend = cleanMessage || query.trim()
+    
+    // Add placeholder conversation immediately if this is a new conversation
+    addPlaceholderConversation(messageToSend)
+    
+    // Hide suggestions on submit
+    closeSuggestions()
+
+    // Send clean message + selected bot IDs
+    await sendMessage(messageToSend, {
       mode: 'conversational',
       stream: true,
-      use_user_sources: true
+      use_user_sources: true,
+      bot_ids: botIds
     })
+    
+    // Clear input and selected bots after sending
     setQuery('')
+    clearSelectedBots()
   }
 
   const handleLoadConversation = async (conversationId) => {
@@ -114,27 +221,129 @@ function App() {
     return date.toLocaleDateString()
   }
 
+  // Handle search input changes and generate suggestions
+  const handleSearchChange = (e) => {
+    const value = e.target.value
+    setConversationSearch(value)
+    
+    if (value.trim()) {
+      // Generate suggestions from conversation titles
+      const suggestions = conversations
+        .filter(conv => 
+          conv.title && 
+          conv.title.toLowerCase().includes(value.toLowerCase()) &&
+          conv.title.toLowerCase() !== value.toLowerCase()
+        )
+        .slice(0, 5)
+        .map(conv => conv.title)
+      
+      setSearchSuggestions(suggestions)
+    } else {
+      setSearchSuggestions([])
+    }
+  }
+
+  // Handle search focus
+  const handleSearchFocus = () => {
+    setIsSearchFocused(true)
+  }
+
+  // Handle search blur
+  const handleSearchBlur = () => {
+    // Delay to allow clicking on suggestions
+    setTimeout(() => setIsSearchFocused(false), 200)
+  }
+
+  // Handle suggestion click
+  const handleSuggestionClick = (suggestion) => {
+    setConversationSearch(suggestion)
+    setIsSearchFocused(false)
+    
+    // Add to recent searches
+    setRecentSearches(prev => {
+      const filtered = prev.filter(s => s !== suggestion)
+      return [suggestion, ...filtered].slice(0, 5)
+    })
+  }
+
+  // Clear search
+  const clearSearch = () => {
+    setConversationSearch('')
+    setSearchSuggestions([])
+    setIsSearchFocused(false)
+  }
+
+  // Filter conversations based on search term
+  const filteredConversations = conversations.filter(conversation => {
+    if (!conversationSearch.trim()) return true
+    
+    const searchTerm = conversationSearch.toLowerCase()
+    const title = (conversation.title || 'untitled conversation').toLowerCase()
+    const preview = (conversation.last_message_preview || '').toLowerCase()
+    
+    return title.includes(searchTerm) || preview.includes(searchTerm)
+  })
+
+  // Handle search from landing page
+  const handleLandingSearch = async (searchQuery, options = {}) => {
+    setShowLanding(false) // Hide landing page
+    setCurrentView('chat') // Switch to chat view
+    setQuery(searchQuery) // Set the query
+    
+    // Start the search if there's a query
+    if (searchQuery.trim()) {
+      // Add placeholder conversation immediately
+      addPlaceholderConversation(searchQuery)
+      
+      await sendMessage(searchQuery, {
+        mode: 'conversational',
+        stream: true,
+        use_user_sources: true,
+        bot_ids: options.bot_ids || []
+      })
+    }
+  }
+
+  // Handle navigation from landing page
+  const handleLandingNavigation = (section) => {
+    setShowLanding(false) // Hide landing page
+    setCurrentView(section) // Switch to the requested view
+  }
+
+  // If landing page should be shown, render it
+  if (showLanding) {
+    return <LandingPage onSearch={handleLandingSearch} onNavigate={handleLandingNavigation} />
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
       {/* Header */}
       <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
+            {/* Scintilla Branding - Far Left */}
             <div className="flex items-center space-x-3">
-              <img 
-                src="/img/scintilla_icon.svg" 
-                alt="Scintilla" 
-                className="h-8 w-8"
-              />
-              <div>
-                <h1 className="text-xl font-semibold text-gray-900 dark:text-white">
-                  Scintilla
-                </h1>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Powered by IgniteTech
-                </p>
-              </div>
+              <button 
+                onClick={() => setShowLanding(true)}
+                className="flex items-center space-x-3 hover:opacity-75 transition-opacity"
+              >
+                <img 
+                  src="/img/scintilla_icon.svg" 
+                  alt="Scintilla" 
+                  className="h-8 w-8"
+                />
+                <div>
+                  <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    Scintilla
+                  </h1>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Powered by IgniteTech
+                  </p>
+                </div>
+              </button>
             </div>
+            
+            {/* Navigation and Status - Right */}
             <div className="flex items-center space-x-4">
               {/* Navigation */}
               <nav className="flex items-center space-x-2">
@@ -206,7 +415,7 @@ function App() {
       {/* Error Banner */}
       {error && (
         <div className="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+          <div className="px-4 sm:px-6 lg:px-8 py-3">
             <div className="flex items-center space-x-2">
               <AlertCircle className="h-4 w-4 text-red-500" />
               <span className="text-sm text-red-700 dark:text-red-300">{error}</span>
@@ -221,49 +430,107 @@ function App() {
         </div>
       )}
 
-      <div className="mx-auto px-4 sm:px-6 lg:px-8 py-8" style={{ maxWidth: 'min(100%, 1800px)' }}>
+      <div className="h-[calc(100vh-64px)] flex">
         {currentView === 'chat' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 lg:gap-8">
+          <div className="flex w-full">
             {/* Sidebar - Previous Conversations */}
-            <div className="lg:col-span-1 xl:col-span-1 2xl:col-span-1 space-y-6 order-2 lg:order-1">
-              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-                {/* Header */}
-                <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Recent Conversations</h3>
-                    <button
-                      onClick={startNewConversation}
-                      className="text-xs px-3 py-1.5 bg-scintilla-500 hover:bg-scintilla-600 text-white rounded-md transition-colors font-medium"
-                    >
-                      New Chat
-                    </button>
+            <div className="w-80 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <div className="h-full flex flex-col">
+                                {/* Header with Stacked Layout */}
+                <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+                  <div className="space-y-3 h-16 flex flex-col justify-center">
+                    {/* New Chat Button - Right Corner Above */}
+                    <div className="flex justify-end">
+                      <button
+                        onClick={startNewConversation}
+                        className="flex items-center space-x-1.5 text-xs px-2.5 py-1.5 bg-scintilla-500 hover:bg-scintilla-600 text-white rounded-md transition-colors font-medium"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>New</span>
+                      </button>
+                    </div>
+                    
+                    {/* Full Width Search Box Below */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                      <input
+                        ref={searchInputRef}
+                        type="text"
+                        value={conversationSearch}
+                        onChange={handleSearchChange}
+                        onFocus={handleSearchFocus}
+                        onBlur={handleSearchBlur}
+                        placeholder="Search conversations..."
+                        className={`w-full pl-9 pr-${conversationSearch ? '9' : '3'} py-2 text-sm border rounded-lg transition-all duration-200 focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white placeholder-gray-400 ${
+                          isSearchFocused 
+                            ? 'border-scintilla-300 dark:border-scintilla-600 shadow-md' 
+                            : 'border-gray-200 dark:border-gray-600'
+                        }`}
+                      />
+                      {conversationSearch && (
+                        <button
+                          onClick={clearSearch}
+                          className="absolute right-3 top-2.5 h-4 w-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+
+                      {/* Search Suggestions Dropdown */}
+                      {isSearchFocused && (searchSuggestions.length > 0 || (!conversationSearch && recentSearches.length > 0)) && (
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
+                          {/* Recent Searches */}
+                          {!conversationSearch && recentSearches.length > 0 && (
+                            <div className="p-3 border-b border-gray-100 dark:border-gray-700">
+                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Recent Searches</p>
+                              <div className="space-y-1">
+                                {recentSearches.map((search, index) => (
+                                  <button
+                                    key={index}
+                                    onClick={() => handleSuggestionClick(search)}
+                                    className="flex items-center w-full px-2 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md text-left"
+                                  >
+                                    <Clock className="h-3 w-3 text-gray-400 mr-2 flex-shrink-0" />
+                                    <span className="truncate">{search}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Conversation Suggestions */}
+                          {searchSuggestions.length > 0 && (
+                            <div className="p-3">
+                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Conversations</p>
+                              <div className="space-y-1">
+                                {searchSuggestions.map((suggestion, index) => (
+                                  <button
+                                    key={index}
+                                    onClick={() => handleSuggestionClick(suggestion)}
+                                    className="flex items-center w-full px-2 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md text-left"
+                                  >
+                                    <MessageSquare className="h-3 w-3 text-gray-400 mr-2 flex-shrink-0" />
+                                    <span className="truncate">{suggestion}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* No Results */}
+                          {conversationSearch && searchSuggestions.length === 0 && (
+                            <div className="p-3 text-center">
+                              <p className="text-sm text-gray-500 dark:text-gray-400">No matching conversations</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                
-                {/* Search Box */}
-                <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Search conversations..."
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white placeholder-gray-400"
-                    />
-                  </div>
-                </div>
+                 </div>
 
                 {/* Conversations List */}
-                <div className={`overflow-y-auto transition-all duration-300 ${
-                  messages.length === 0 
-                    ? 'max-h-48 lg:max-h-[300px]' 
-                    : messages.length <= 3 
-                      ? 'max-h-48 lg:max-h-[400px]' 
-                      : messages.length <= 6 
-                        ? 'max-h-48 lg:max-h-[500px]' 
-                        : messages.length <= 10 
-                          ? 'max-h-48 lg:max-h-[600px]' 
-                          : 'max-h-48 lg:max-h-[calc(100vh-500px)]'
-                }`}>
+                <div className="flex-1 overflow-y-auto">
                   {conversations.length === 0 ? (
                     <div className="text-center py-12 px-4">
                       <MessageSquare className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
@@ -274,13 +541,27 @@ function App() {
                         Start chatting to see your history here
                       </p>
                     </div>
+                  ) : filteredConversations.length === 0 ? (
+                    <div className="text-center py-12 px-4">
+                      <Search className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+                      <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        No conversations found
+                      </p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500">
+                        Try adjusting your search term
+                      </p>
+                    </div>
                   ) : (
                     <div className="divide-y divide-gray-100 dark:divide-gray-700">
-                      {conversations.map((conversation) => (
+                      {filteredConversations.map((conversation) => (
                         <div
                           key={conversation.conversation_id}
-                          onClick={() => handleLoadConversation(conversation.conversation_id)}
-                          className={`group relative px-4 py-4 cursor-pointer transition-all duration-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${
+                          onClick={() => !conversation.isPlaceholder && handleLoadConversation(conversation.conversation_id)}
+                          className={`group relative px-4 py-4 transition-all duration-200 ${
+                            conversation.isPlaceholder 
+                              ? 'cursor-default opacity-75' 
+                              : 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                          } ${
                             currentConversationId === conversation.conversation_id
                               ? 'bg-scintilla-50 dark:bg-scintilla-900/20 border-r-2 border-scintilla-500'
                               : ''
@@ -290,9 +571,17 @@ function App() {
                             <div className="flex-1 min-w-0 pr-2">
                               <div className="flex items-center space-x-2 mb-1">
                                 <h4 className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                                  {conversation.title || 'Untitled Conversation'}
+                                  {conversation.isPlaceholder 
+                                    ? 'New Conversation' 
+                                    : (conversation.title || 'Untitled Conversation')
+                                  }
                                 </h4>
-                                {conversation.message_count && (
+                                {conversation.isPlaceholder && (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300">
+                                    Writing...
+                                  </span>
+                                )}
+                                {conversation.message_count && !conversation.isPlaceholder && (
                                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
                                     {conversation.message_count}
                                   </span>
@@ -315,12 +604,14 @@ function App() {
                                 )}
                               </div>
                             </div>
-                            <button
-                              onClick={(e) => deleteConversation(conversation.conversation_id, e)}
-                              className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 transition-all rounded-md hover:bg-gray-100 dark:hover:bg-gray-600"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            {!conversation.isPlaceholder && (
+                              <button
+                                onClick={(e) => deleteConversation(conversation.conversation_id, e)}
+                                className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 transition-all rounded-md hover:bg-gray-100 dark:hover:bg-gray-600"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -331,151 +622,252 @@ function App() {
             </div>
 
             {/* Main Chat Area */}
-            <div className="lg:col-span-3 xl:col-span-4 2xl:col-span-5 order-1 lg:order-2">
-              <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-300 max-w-4xl mx-auto ${
-                messages.length === 0 
-                  ? 'h-[400px]' 
-                  : messages.length <= 3 
-                    ? 'h-[500px]' 
-                    : messages.length <= 6 
-                      ? 'h-[600px]' 
-                      : messages.length <= 10 
-                        ? 'h-[700px]' 
-                        : 'h-[calc(100vh-200px)] max-h-[800px]'
-              }`}>
-                {/* Chat Header */}
-                <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-gradient-to-r from-scintilla-500 to-scintilla-600 rounded-full flex items-center justify-center">
-                        <MessageSquare className="h-5 w-5 text-white" />
-                      </div>
-                      <div>
-                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                          {currentConversationId ? 'Continue Conversation' : 'How may I help you today?'}
-                        </h2>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          Ask to find answers from your knowledge base
-                        </p>
-                      </div>
+            <div className="flex-1 flex flex-col bg-white dark:bg-gray-800">
+              {/* Chat Header */}
+              <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <div className="flex items-center justify-between h-16">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-gradient-to-r from-scintilla-500 to-scintilla-600 rounded-full flex items-center justify-center">
+                      <MessageSquare className="h-5 w-5 text-white" />
                     </div>
-                    <div className="flex items-center space-x-2">
-                      {currentConversationId && (
-                        <button 
-                          onClick={startNewConversation}
-                          className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600"
-                        >
-                          New Chat
-                        </button>
-                      )}
-                      {messages.length > 0 && (
-                        <button 
-                          onClick={clearMessages}
-                          className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
-                        >
-                          Clear
-                        </button>
-                      )}
+                    <div>
+                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                        {currentConversationId ? 'Continue Conversation' : 'How may I help you today?'}
+                      </h2>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        Ask to find answers from your knowledge base
+                      </p>
                     </div>
                   </div>
+                  <div className="flex items-center space-x-2">
+                    {currentConversationId && (
+                      <button 
+                        onClick={startNewConversation}
+                        className="flex items-center space-x-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>New Chat</span>
+                      </button>
+                    )}
+                    {messages.length > 0 && (
+                      <button 
+                        onClick={clearMessages}
+                        className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
+              </div>
 
-                {/* Messages Area */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {/* Messages Area - Center-aligned like Dashworks */}
+              <div className="flex-1 overflow-y-auto px-6 py-4">
+                <div className="max-w-4xl mx-auto space-y-8">
                   {messages.length === 0 ? (
-                    <div className="text-center py-12">
-                      <Search className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                      <p className="text-gray-500 dark:text-gray-400 text-lg">
+                    <div className="text-center py-20">
+                      <Search className="h-16 w-16 text-gray-300 dark:text-gray-600 mx-auto mb-6" />
+                      <p className="text-gray-500 dark:text-gray-400 text-xl mb-2">
                         Start a conversation to search your knowledge base
                       </p>
-                      <p className="text-gray-400 dark:text-gray-500 text-sm mt-2">
+                      <p className="text-gray-400 dark:text-gray-500 text-base">
                         I can help you find information across your sources and bots
                       </p>
                     </div>
                   ) : (
                     messages.map((message) => (
-                      <div
-                        key={message.id}
-                        className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                      >
-                        <div
-                          className={`max-w-xs lg:max-w-lg xl:max-w-2xl px-4 py-3 rounded-lg ${
-                            message.role === 'user'
-                              ? 'bg-scintilla-500 text-white'
-                              : message.isError
-                              ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800'
-                              : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
-                          }`}
-                        >
-                          <div className="relative">
-                            {message.role === 'assistant' && message.sources && message.sources.length > 0 ? (
-                              <CitationRenderer 
-                                content={message.content}
-                                sources={message.sources}
-                                onCitationClick={(num) => console.log(`Citation ${num} clicked`)}
-                              />
-                            ) : (
-                              <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                            )}
-                            {(message.isUsingTools || message.isProcessing) && (
-                              <div className="flex items-center space-x-2 mt-2">
-                                <div className="w-2 h-2 bg-scintilla-500 rounded-full animate-pulse"></div>
-                                <span className="text-xs text-scintilla-600 dark:text-scintilla-400">
-                                  {message.isUsingTools ? 'Executing tools...' : 'Processing results...'}
-                                </span>
-                              </div>
-                            )}
+                      <div key={message.id} className="w-full">
+                        {message.role === 'user' ? (
+                        /* User Message - Boxed and full width */
+                        <div className="w-full">
+                          <div className="bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 px-6 py-4 rounded-2xl shadow-sm">
+                            <p className="whitespace-pre-wrap leading-relaxed text-gray-900 dark:text-white">{message.content}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                              {formatTimestamp(message.timestamp)}
+                            </p>
                           </div>
-                          {message.toolCalls && message.toolCalls.length > 0 && !message.isStreaming && (
-                            <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
-                              <p className="text-xs text-gray-500 dark:text-gray-400">
-                                Used {message.toolCalls.length} tool{message.toolCalls.length > 1 ? 's' : ''}: {message.toolCalls.map(tc => tc.name || tc).join(', ')}
-                              </p>
-                              {message.processingStats && (
-                                <div className="mt-1 text-xs text-gray-400 dark:text-gray-500 space-y-1">
-                                  {message.processingStats.tools_truncated > 0 && (
-                                    <div className="inline-flex items-center space-x-1">
-                                      <span>📊</span>
-                                      <span>
-                                        Content optimized: {message.processingStats.tokens_saved?.toLocaleString()} tokens saved
-                                        ({message.processingStats.tools_truncated} tool{message.processingStats.tools_truncated > 1 ? 's' : ''} processed)
-                                      </span>
-                                    </div>
-                                  )}
-                                  {message.processingStats.sources_found > 0 && (
-                                    <div className="inline-flex items-center space-x-1">
-                                      <span>📚</span>
-                                      <span>
-                                        {message.processingStats.sources_found} source{message.processingStats.sources_found > 1 ? 's' : ''} referenced
-                                      </span>
-                                    </div>
-                                  )}
+                        </div>
+                      ) : (
+                        /* AI Response - Free-flowing and center-aligned */
+                        <div className="w-full">
+                          <div className={`mx-auto ${
+                            message.isError
+                              ? 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800 px-6 py-4 rounded-2xl max-w-2xl'
+                              : 'text-gray-900 dark:text-white'
+                          }`}>
+                            <div className="relative group">
+                              {/* Copy button - only show for assistant messages */}
+                              {message.role === 'assistant' && !message.isError && (
+                                <button
+                                  onClick={(event) => {
+                                    // Extract plain text from content, removing citations and formatting
+                                    const plainText = message.content
+                                      .replace(/\[(\d+)\]/g, '') // Remove citation numbers
+                                      .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold formatting
+                                      .replace(/\*([^*]+)\*/g, '$1') // Remove italic formatting
+                                      .replace(/#{1,6}\s+/g, '') // Remove markdown headers
+                                      .replace(/^\s*[-*+]\s+/gm, '• ') // Convert bullet points
+                                      .replace(/^\s*\d+\.\s+/gm, (match) => {
+                                        const num = match.match(/\d+/)[0]
+                                        return `${num}. `
+                                      }) // Keep numbered lists
+                                      .trim()
+                                    
+                                    const button = event.target.closest('button')
+                                    const originalText = button.innerHTML
+                                    
+                                    // Function to show success feedback
+                                    const showSuccess = () => {
+                                      button.innerHTML = '✓ Copied!'
+                                      button.classList.add('bg-green-100', 'text-green-700')
+                                      setTimeout(() => {
+                                        button.innerHTML = originalText
+                                        button.classList.remove('bg-green-100', 'text-green-700')
+                                      }, 2000)
+                                    }
+                                    
+                                    // Function to show error feedback
+                                    const showError = () => {
+                                      button.innerHTML = '❌ Failed'
+                                      button.classList.add('bg-red-100', 'text-red-700')
+                                      setTimeout(() => {
+                                        button.innerHTML = originalText
+                                        button.classList.remove('bg-red-100', 'text-red-700')
+                                      }, 2000)
+                                    }
+                                    
+                                    // Try modern clipboard API first
+                                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                                      navigator.clipboard.writeText(plainText)
+                                        .then(showSuccess)
+                                        .catch(() => {
+                                          // Fallback to legacy method
+                                          try {
+                                            const textArea = document.createElement('textarea')
+                                            textArea.value = plainText
+                                            textArea.style.position = 'fixed'
+                                            textArea.style.left = '-999999px'
+                                            textArea.style.top = '-999999px'
+                                            document.body.appendChild(textArea)
+                                            textArea.focus()
+                                            textArea.select()
+                                            const successful = document.execCommand('copy')
+                                            document.body.removeChild(textArea)
+                                            if (successful) {
+                                              showSuccess()
+                                            } else {
+                                              showError()
+                                            }
+                                          } catch {
+                                            showError()
+                                          }
+                                        })
+                                    } else {
+                                      // Use legacy method directly
+                                      try {
+                                        const textArea = document.createElement('textarea')
+                                        textArea.value = plainText
+                                        textArea.style.position = 'fixed'
+                                        textArea.style.left = '-999999px'
+                                        textArea.style.top = '-999999px'
+                                        document.body.appendChild(textArea)
+                                        textArea.focus()
+                                        textArea.select()
+                                        const successful = document.execCommand('copy')
+                                        document.body.removeChild(textArea)
+                                        if (successful) {
+                                          showSuccess()
+                                        } else {
+                                          showError()
+                                        }
+                                      } catch {
+                                        showError()
+                                      }
+                                    }
+                                  }}
+                                  className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 px-3 py-1 rounded-md text-sm border border-gray-200 dark:border-gray-600"
+                                  title="Copy response text"
+                                >
+                                  📋 Copy
+                                </button>
+                              )}
+                              
+                              {message.role === 'assistant' ? (
+                                <CitationRenderer 
+                                  content={message.content}
+                                  sources={message.sources || []}
+                                  onCitationClick={(num) => console.log(`Citation ${num} clicked`)}
+                                />
+                              ) : (
+                                <div className="prose prose-lg dark:prose-invert max-w-none prose-p:leading-relaxed prose-p:mb-4">
+                                  <div className="whitespace-pre-wrap leading-relaxed text-base">{message.content}</div>
                                 </div>
                               )}
-                              {message.queryTiming && (
-                                <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                                  <div className="inline-flex items-center space-x-1">
-                                    <span>⏱️</span>
-                                    <span>
-                                      Query completed in {message.queryTiming.totalTime}ms
-                                      {message.queryTiming.toolsExecutionTime && ` (tools: ${message.queryTiming.toolsExecutionTime}ms)`}
-                                      {message.queryTiming.backendTiming && ` (backend: ${message.queryTiming.backendTiming.total_time_ms}ms)`}
-                                    </span>
-                                  </div>
+                              {(message.isUsingTools || message.isProcessing) && (
+                                <div className="flex items-center justify-center space-x-2 mt-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                                  <div className="w-2 h-2 bg-scintilla-500 rounded-full animate-pulse"></div>
+                                  <span className="text-sm text-scintilla-600 dark:text-scintilla-400">
+                                    {message.isUsingTools ? 'Executing tools...' : 'Processing results...'}
+                                  </span>
                                 </div>
                               )}
                             </div>
-                          )}
-                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                            {formatTimestamp(message.timestamp)}
-                          </p>
+                            {message.toolCalls && message.toolCalls.length > 0 && !message.isStreaming && (
+                              <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600">
+                                <div className="text-center">
+                                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                                    Used {message.toolCalls.length} tool{message.toolCalls.length > 1 ? 's' : ''}: {message.toolCalls.map(tc => tc.name || tc).join(', ')}
+                                  </p>
+                                  {message.processingStats && (
+                                    <div className="text-sm text-gray-400 dark:text-gray-500 space-y-1">
+                                      {message.processingStats.tools_truncated > 0 && (
+                                        <div className="inline-flex items-center space-x-1">
+                                          <span>📊</span>
+                                          <span>
+                                            Content optimized: {message.processingStats.tokens_saved?.toLocaleString()} tokens saved
+                                            ({message.processingStats.tools_truncated} tool{message.processingStats.tools_truncated > 1 ? 's' : ''} processed)
+                                          </span>
+                                        </div>
+                                      )}
+                                      {message.processingStats.sources_found > 0 && (
+                                        <div className="inline-flex items-center space-x-1 ml-4">
+                                          <span>📚</span>
+                                          <span>
+                                            {message.processingStats.sources_found} source{message.processingStats.sources_found > 1 ? 's' : ''} referenced
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {message.queryTiming && (
+                                    <div className="mt-2 text-sm text-gray-400 dark:text-gray-500">
+                                      <div className="inline-flex items-center space-x-1">
+                                        <span>⏱️</span>
+                                        <span>
+                                          Query completed in {message.queryTiming.totalTime}ms
+                                          {message.queryTiming.toolsExecutionTime && ` (tools: ${message.queryTiming.toolsExecutionTime}ms)`}
+                                          {message.queryTiming.backendTiming && ` (backend: ${message.queryTiming.backendTiming.total_time_ms}ms)`}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            <div className="text-center mt-4">
+                              <p className="text-xs text-gray-400 dark:text-gray-500">
+                                {formatTimestamp(message.timestamp)}
+                              </p>
+                            </div>
+                          </div>
                         </div>
+                                              )}
                       </div>
                     ))
                   )}
                   {isLoading && (
-                    <div className="flex justify-start">
-                      <div className="bg-gray-100 dark:bg-gray-700 px-4 py-3 rounded-lg">
+                    <div className="flex justify-center">
+                      <div className="bg-gray-50 dark:bg-gray-700 px-6 py-4 rounded-2xl">
                         <div className="flex space-x-1">
                           <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
                           <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
@@ -485,42 +877,64 @@ function App() {
                     </div>
                   )}
                 </div>
+              </div>
 
-                {/* Input Area */}
-                <div className="p-6 border-t border-gray-200 dark:border-gray-700">
-                  <form onSubmit={handleSubmit} className="flex space-x-4">
-                    <div className="flex-1 relative">
-                      <input
-                        type="text"
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Ask to find answers from your knowledge base..."
-                        className="w-full px-4 py-3 pr-12 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                        disabled={isLoading || !isConnected}
-                      />
-                      <Search className="absolute right-3 top-3.5 h-5 w-5 text-gray-400" />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={!query.trim() || isLoading || !isConnected}
-                      className="px-6 py-3 bg-scintilla-500 text-white rounded-lg hover:bg-scintilla-600 focus:ring-2 focus:ring-scintilla-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <Send className="h-5 w-5" />
-                    </button>
-                  </form>
-                </div>
+              {/* Input Area */}
+              <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+                {/* Selected Bots Chips */}
+                <SelectedBotsChips 
+                  selectedBots={selectedBots} 
+                  onRemoveBot={removeSelectedBot}
+                />
+                
+                <form onSubmit={handleSubmit} className="flex space-x-4">
+                  <div className="flex-1 relative">
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={handleInputChange}
+                      onKeyDown={handleKeyDown}
+                      placeholder={
+                        isSavingConversation 
+                          ? "Saving conversation..." 
+                          : "Ask to find answers from your knowledge base... (type @ to add bots)"
+                      }
+                      className="w-full px-6 py-4 pr-12 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 text-base"
+                      disabled={isLoading || !isConnected || isSavingConversation}
+                      ref={inputRef}
+                    />
+                    <Search className="absolute right-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    
+                    {/* Bot Suggestions Dropdown */}
+                    <BotSuggestionsDropdown
+                      showBotSuggestions={showBotSuggestions}
+                      botSuggestions={botSuggestions}
+                      selectedSuggestionIndex={selectedSuggestionIndex}
+                      onSelectBot={handleSelectBot}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!query.trim() || isLoading || !isConnected || isSavingConversation}
+                    className="px-6 py-4 bg-scintilla-500 text-white rounded-xl hover:bg-scintilla-600 focus:ring-2 focus:ring-scintilla-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <Send className="h-5 w-5" />
+                  </button>
+                </form>
               </div>
             </div>
-
-
           </div>
         ) : currentView === 'sources' ? (
-          <div className="max-w-full">
-            <SourcesManager />
+          <div className="flex-1 p-8">
+            <div className="max-w-5xl mx-auto">
+              <SourcesManager />
+            </div>
           </div>
         ) : currentView === 'bots' ? (
-          <div className="max-w-full">
-            <BotsManager />
+          <div className="flex-1 p-8">
+            <div className="max-w-5xl mx-auto">
+              <BotsManager />
+            </div>
           </div>
         ) : null}
       </div>

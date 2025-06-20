@@ -335,7 +335,7 @@ export const CitationRenderer = ({ content, sources = [], onCitationClick }) => 
   const cleanedContent = content
     .replace(/\*\*Sources:\*\*[\s\S]*?(?=\n\n|\n$|$)/g, '')  // Remove **Sources:** sections
     .replace(/## Sources[\s\S]*?(?=\n\n|\n$|$)/g, '')        // Remove ## Sources sections
-    .replace(/Sources[\s\S]*?(?=\n\n|\n$|$)/g, '')           // Remove any other Sources sections
+    .replace(/^Sources[\s\S]*?(?=\n\n|\n$|$)/gm, '')         // Remove Sources sections that start at beginning of line
     .replace(/<SOURCES>[\s\S]*?<\/SOURCES>/g, '')            // Remove <SOURCES> delimited sections
     .trim()
 

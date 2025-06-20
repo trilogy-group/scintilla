@@ -80,3 +80,137 @@ web/            # React front‑end
 ---
 
 Cursor: treat these points as friendly guard‑rails, not strict gates.
+
+
+## SQLAlchemy Async Session Management Rule
+
+**CRITICAL**: To prevent `sqlalchemy.exc.MissingGreenlet` errors in FastAPI with async SQLAlchemy:
+
+### 1. Extract ALL Model Attributes Early
+**Always extract ALL model attributes immediately after querying**, before any complex database operations:
+
+```python
+# ✅ GOOD: Extract all attributes at the start
+bot = await db.get(Bot, bot_id)
+if not bot:
+    raise HTTPException(404, "Not found")
+
+# Extract ALL attributes you'll need later
+bot_id_value = bot.bot_id
+bot_name = bot.name
+bot_description = bot.description
+bot_source_ids = bot.source_ids
+bot_created_by_admin_id = bot.created_by_admin_id
+bot_is_public = bot.is_public
+bot_allowed_user_ids = bot.allowed_user_ids
+bot_created_at = bot.created_at
+bot_updated_at = bot.updated_at
+
+# Now safe to do complex operations...
+```
+
+### 2. Track Changes Using Local Variables
+When updating models, track changes in local variables instead of accessing model attributes later:
+
+```python
+# ✅ GOOD: Track updated values
+updated_name = update_data.name if update_data.name is not None else bot_name
+updated_description = update_data.description if update_data.description is not None else bot_description
+
+# Apply changes to model
+if update_data.name is not None:
+    bot.name = update_data.name
+if update_data.description is not None:
+    bot.description = update_data.description
+
+# Use tracked values for responses/logging
+return Response(
+    name=updated_name,  # ✅ Use tracked value
+    description=updated_description  # ✅ Use tracked value
+)
+```
+
+### 3. Operations That Trigger Greenlet Errors
+**NEVER access model attributes after these operations:**
+- `await db.flush()`
+- `await db.commit()`
+- `await db.delete(model)`
+- Multiple complex queries in sequence
+- Loops that modify multiple records
+- Any operation that changes session state
+
+### 4. Common Error Patterns
+```python
+# ❌ BAD: Accessing attributes after commit
+await db.commit()
+return Response(bot_id=bot.bot_id)  # WILL CAUSE GREENLET ERROR
+
+# ❌ BAD: Accessing attributes in loops after operations
+for access in access_records:
+    await db.delete(access)
+# Later...
+logger.info(f"Deleted bot {bot.name}")  # WILL CAUSE GREENLET ERROR
+
+# ❌ BAD: Accessing attributes after flush
+await db.flush()
+new_record = SomeModel(foreign_key=bot.bot_id)  # WILL CAUSE GREENLET ERROR
+```
+
+### 5. Safe Patterns
+```python
+# ✅ GOOD: Complete extraction pattern
+def extract_model_data(model):
+    """Extract all needed data from SQLAlchemy model"""
+    return {
+        'id': model.id,
+        'name': model.name,
+        'description': model.description,
+        # ... all fields you might need
+    }
+
+# Use at start of function
+model_data = extract_model_data(bot)
+
+# ✅ GOOD: Use function parameters instead of model attributes
+def create_access_record(user_id: UUID, bot_id: UUID):  # Pass values directly
+    return UserBotAccess(user_id=user_id, bot_id=bot_id)
+
+# ✅ GOOD: Extract before loops
+bot_id_value = bot.bot_id
+for user_id in user_ids:
+    access = UserBotAccess(user_id=user_id, bot_id=bot_id_value)
+```
+
+### 6. Response Creation Pattern
+```python
+# ✅ GOOD: Complete safe response pattern
+async def update_model(id: UUID, update_data: UpdateModel):
+    # 1. Get model and extract all data
+    model = await db.get(Model, id)
+    original_data = extract_model_data(model)
+    
+    # 2. Track all changes
+    updated_field1 = update_data.field1 if update_data.field1 is not None else original_data['field1']
+    updated_field2 = update_data.field2 if update_data.field2 is not None else original_data['field2']
+    
+    # 3. Apply changes
+    if update_data.field1 is not None:
+        model.field1 = update_data.field1
+    
+    # 4. Commit
+    await db.commit()
+    
+    # 5. Return using tracked values
+    return ModelResponse(
+        id=original_data['id'],
+        field1=updated_field1,
+        field2=updated_field2
+    )
+```
+
+### 7. Debugging Tips
+- If you see "greenlet_spawn has not been called", look for model attribute access after database operations
+- Add logging before accessing attributes: `logger.debug(f"About to access {model.__class__.__name__} attributes")`
+- Use `dir(model)` to see what attributes are available without triggering lazy loading
+
+This pattern prevents SQLAlchemy from attempting synchronous lazy-loading in async contexts, which is the root cause of MissingGreenlet errors.

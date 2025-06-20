@@ -1,6 +1,7 @@
-from typing import List
+from typing import List, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
+import os
 
 
 class Settings(BaseSettings):
@@ -34,6 +35,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
     api_port: int = Field(default=8000, env="API_PORT")
     
+    # Test Mode - bypass MCP for faster development
+    test_mode: bool = Field(default=False, env="TEST_MODE")
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -44,4 +48,23 @@ class Settings(BaseSettings):
 
 
 # Global settings instance
-settings = Settings() 
+settings = Settings()
+
+# Database
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://scintilla:scintilla@localhost/scintilla")
+
+# OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# AWS KMS
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+KMS_KEY_ID = os.getenv("KMS_KEY_ID")
+
+# Server
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "8000"))
+
+# Test Mode - bypass MCP for faster development
+TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
+
+ 

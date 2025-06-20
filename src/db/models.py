@@ -15,12 +15,16 @@ from .base import Base
 
 class MCPServerType(Enum):
     """MCP Server types"""
-    CUSTOM_SSE = "CUSTOM_SSE"
+    CUSTOM_SSE = "CUSTOM_SSE"           # Legacy: Uses mcp-proxy with command line args
+    DIRECT_SSE = "DIRECT_SSE"           # New: Direct URL connection with headers
+    WEBSOCKET = "WEBSOCKET"             # Future: WebSocket connections
 
 
 class CredentialType(Enum):
     """Credential types for MCP servers"""
-    API_KEY_HEADER = "API_KEY_HEADER"
+    API_KEY_HEADER = "API_KEY_HEADER"   # Legacy: For CUSTOM_SSE (x-api-key header)
+    BEARER_TOKEN = "BEARER_TOKEN"       # New: For DIRECT_SSE (Authorization: Bearer)
+    CUSTOM_HEADERS = "CUSTOM_HEADERS"   # Future: Flexible header configuration
 
 
 class User(Base):
@@ -49,12 +53,19 @@ class Source(Base):
     source_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
+    instructions = Column(Text, nullable=True)  # Instructions for this source when used in bots
     server_type = Column(SQLEnum(MCPServerType), nullable=False)
     server_url = Column(String(500), nullable=False)
     required_fields = Column(JSONB, nullable=False, default=lambda: ["api_key"])
     
-    # Ownership
-    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    # Tool caching metadata
+    tools_last_cached_at = Column(DateTime(timezone=True), nullable=True)
+    tools_cache_status = Column(String(50), default="pending", nullable=False)  # pending, cached, error
+    tools_cache_error = Column(Text, nullable=True)
+    
+    # Ownership - either user-owned or bot-owned
+    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    owner_bot_id = Column(UUID(as_uuid=True), ForeignKey("bots.bot_id"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -62,7 +73,9 @@ class Source(Base):
     
     # Relationships
     owner = relationship("User", back_populates="owned_sources")
+    owner_bot = relationship("Bot", back_populates="owned_sources")
     credentials = relationship("MCPCredential", back_populates="source", cascade="all, delete-orphan")
+    tools = relationship("SourceTool", back_populates="source", cascade="all, delete-orphan")
 
 
 class Bot(Base):
@@ -72,7 +85,7 @@ class Bot(Base):
     bot_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    source_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list)
+    source_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list)  # Keep for backward compatibility
     
     # Admin configuration
     created_by_admin_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
@@ -85,6 +98,7 @@ class Bot(Base):
     # Relationships
     created_by_admin = relationship("User", back_populates="created_bots")
     user_access = relationship("UserBotAccess", back_populates="bot", cascade="all, delete-orphan")
+    owned_sources = relationship("Source", back_populates="owner_bot", cascade="all, delete-orphan")
 
 
 class UserBotAccess(Base):
@@ -155,23 +169,30 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
-class MCPToolCache(Base):
-    """Cache for MCP tool information to avoid repeated tool listing"""
-    __tablename__ = "mcp_tool_cache"
+class SourceTool(Base):
+    """Cached tool metadata from MCP servers - populated during source creation/refresh"""
+    __tablename__ = "source_tools"
     
-    cache_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
-    bot_source_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=True, default=list)  # Empty for user-only
+    tool_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_id = Column(UUID(as_uuid=True), ForeignKey("sources.source_id"), nullable=False)
     
-    # Cached tool data
-    tools_data = Column(JSONB, nullable=False)  # Serialized tool information
-    loaded_servers = Column(ARRAY(String), nullable=False, default=list)
-    tool_count = Column(String, nullable=False, default="0")
+    # Tool metadata from MCP server
+    tool_name = Column(String(255), nullable=False)
+    tool_description = Column(Text, nullable=True)
+    tool_schema = Column(JSONB, nullable=True)  # Full JSON schema for the tool
     
-    # Cache metadata
-    cache_key = Column(String(500), nullable=False, unique=True, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Caching metadata
     last_refreshed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
     # Relationships
-    user = relationship("User") 
+    source = relationship("Source", back_populates="tools")
+
+    def __repr__(self):
+        return f"<SourceTool(tool_name='{self.tool_name}', source_id='{self.source_id}')>"
+
+
+# MCPToolCache removed - using simple source-based loading instead 

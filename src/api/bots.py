@@ -16,55 +16,16 @@ from sqlalchemy.orm import selectinload
 import structlog
 
 from src.db.base import get_db_session
-from src.db.models import User, Bot, Source, UserBotAccess
-from src.db.mcp_credentials import get_bot_sources_with_credentials
+from src.db.models import User, Bot, Source, UserBotAccess, MCPServerType
+from src.db.mcp_credentials import get_bot_sources_with_credentials, store_source_credentials
 from src.auth.mock import get_current_user
+from src.api.models import BotCreate, BotUpdate, BotResponse, BotWithSourcesResponse, BotSourceCreate, BotSourceUpdate, SourceResponse, UserBotAccessResponse
 
 logger = structlog.get_logger()
 router = APIRouter()
 
 
-# Request/Response Models
-class BotCreate(BaseModel):
-    """Request to create a new bot"""
-    name: str = Field(..., description="Display name for the bot")
-    description: Optional[str] = None
-    source_ids: List[uuid.UUID] = Field(..., description="List of source IDs to include in this bot")
-    is_public: bool = Field(default=False, description="Whether the bot is publicly accessible")
-    allowed_user_ids: Optional[List[uuid.UUID]] = Field(default=None, description="User IDs allowed to access this bot (if not public)")
-
-class BotUpdate(BaseModel):
-    """Request to update a bot"""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    source_ids: Optional[List[uuid.UUID]] = None
-    is_public: Optional[bool] = None
-    allowed_user_ids: Optional[List[uuid.UUID]] = None
-
-class BotResponse(BaseModel):
-    """Bot information response"""
-    bot_id: uuid.UUID
-    name: str
-    description: Optional[str]
-    source_ids: List[uuid.UUID]
-    created_by_admin_id: uuid.UUID
-    is_public: bool
-    allowed_user_ids: List[uuid.UUID]
-    created_at: datetime
-    updated_at: Optional[datetime]
-
-class BotWithSourcesResponse(BotResponse):
-    """Bot response with source details"""
-    sources: List[dict]  # Will contain source information
-    tool_count: Optional[int]
-    user_has_access: bool
-
-class UserBotAccessResponse(BaseModel):
-    """User bot access information"""
-    user_id: uuid.UUID
-    bot_id: uuid.UUID
-    granted_at: datetime
-    granted_by_admin_id: uuid.UUID
+# All models now imported from src.api.models
 
 
 @router.post("/bots", response_model=BotResponse)
@@ -73,25 +34,10 @@ async def create_bot(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Create a new bot (admin-only functionality)"""
+    """Create a new bot with dedicated sources (admin-only functionality)"""
     
     # TODO: Add admin permission check
     # For now, any user can create bots
-    
-    # Verify all source IDs exist and are accessible
-    if bot_data.source_ids:
-        source_query = select(Source).where(
-            Source.source_id.in_(bot_data.source_ids),
-            Source.is_active == True
-        )
-        result = await db.execute(source_query)
-        found_sources = result.scalars().all()
-        
-        if len(found_sources) != len(bot_data.source_ids):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more source IDs are invalid or inactive"
-            )
     
     # Create bot with timezone-aware datetime
     bot_id = uuid.uuid4()
@@ -101,7 +47,7 @@ async def create_bot(
         bot_id=bot_id,
         name=bot_data.name,
         description=bot_data.description,
-        source_ids=bot_data.source_ids or [],
+        source_ids=[],  # Will be populated after sources are created
         created_by_admin_id=user.user_id,
         is_public=bot_data.is_public,
         allowed_user_ids=bot_data.allowed_user_ids or [],
@@ -110,20 +56,60 @@ async def create_bot(
     )
     
     db.add(bot)
-    await db.flush()
+    await db.flush()  # Get the bot ID without committing
     
-    # Pre-capture values for response before commit
-    response_data = {
-        "bot_id": bot_id,
-        "name": bot_data.name,
-        "description": bot_data.description,
-        "source_ids": bot_data.source_ids or [],
-        "created_by_admin_id": user.user_id,
-        "is_public": bot_data.is_public,
-        "allowed_user_ids": bot_data.allowed_user_ids or [],
-        "created_at": now,
-        "updated_at": now
-    }
+    # Create dedicated sources for this bot
+    created_source_ids = []
+    for source_data in bot_data.sources:
+        try:
+            # Validate server type
+            server_type = MCPServerType(source_data.server_type)
+        except ValueError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid server type: {source_data.server_type}"
+            )
+        
+        # Create source owned by the bot
+        source_id = uuid.uuid4()
+        source = Source(
+            source_id=source_id,
+            name=source_data.name,
+            description=source_data.description,
+            instructions=source_data.instructions,
+            server_type=server_type,
+            server_url=source_data.server_url,
+            owner_user_id=None,  # Bot-owned, not user-owned
+            owner_bot_id=bot_id,
+            is_active=True,
+            created_at=now,
+            updated_at=now
+        )
+        
+        db.add(source)
+        await db.flush()  # Get the source ID
+        
+        # Store credentials for the source
+        try:
+            await store_source_credentials(
+                db=db,
+                source_id=source_id,
+                credentials=source_data.credentials
+            )
+            created_source_ids.append(source_id)
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error("Failed to store source credentials for bot", 
+                        bot_id=bot_id, source_id=source_id, error=str(e))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to store credentials for source: {source_data.name}"
+            )
+    
+    # Update bot with created source IDs
+    bot.source_ids = created_source_ids
     
     # Create user access records for allowed users
     if not bot_data.is_public and bot_data.allowed_user_ids:
@@ -131,22 +117,31 @@ async def create_bot(
             access = UserBotAccess(
                 user_id=user_id,
                 bot_id=bot_id,
-                granted_at=now,
-                granted_by_admin_id=user.user_id
+                granted_at=now
             )
             db.add(access)
     
     await db.commit()
     
     logger.info(
-        "Bot created",
+        "Bot created with dedicated sources",
         bot_id=bot_id,
         name=bot_data.name,
         created_by=user.user_id,
-        source_count=len(bot_data.source_ids or [])
+        source_count=len(created_source_ids)
     )
     
-    return BotResponse(**response_data)
+    return BotResponse(
+        bot_id=bot_id,
+        name=bot_data.name,
+        description=bot_data.description,
+        source_ids=created_source_ids,
+        created_by_admin_id=user.user_id,
+        is_public=bot_data.is_public,
+        allowed_user_ids=bot_data.allowed_user_ids or [],
+        created_at=now,
+        updated_at=now
+    )
 
 
 @router.get("/bots", response_model=List[BotResponse])
@@ -229,35 +224,40 @@ async def get_bot(
             detail="Not authorized to access this bot"
         )
     
-    # Get source details
+    # Get bot-owned sources
     sources = []
-    if bot.source_ids:
-        source_query = select(Source).where(
-            Source.source_id.in_(bot.source_ids),
-            Source.is_active == True
+    source_query = select(Source).where(
+        Source.owner_bot_id == bot_id,
+        Source.is_active == True
+    )
+    source_result = await db.execute(source_query)
+    source_objects = source_result.scalars().all()
+    
+    sources = [
+        SourceResponse(
+            source_id=source.source_id,
+            name=source.name,
+            description=source.description,
+            instructions=source.instructions,
+            server_type=source.server_type.value,
+            server_url=source.server_url,
+            owner_user_id=source.owner_user_id,
+            owner_bot_id=source.owner_bot_id,
+            is_active=source.is_active,
+            created_at=source.created_at,
+            updated_at=source.updated_at
         )
-        source_result = await db.execute(source_query)
-        source_objects = source_result.scalars().all()
-        
-        sources = [
-            {
-                "source_id": str(source.source_id),
-                "name": source.name,
-                "description": source.description,
-                "server_type": source.server_type.value,
-                "server_url": source.server_url
-            }
-            for source in source_objects
-        ]
+        for source in source_objects
+    ]
     
     # TODO: Get tool count from MCP client
-    tool_count = len(bot.source_ids) * 8 if bot.source_ids else 0  # Estimate
+    tool_count = len(sources) * 8 if sources else 0  # Estimate
     
     return BotWithSourcesResponse(
         bot_id=bot.bot_id,
         name=bot.name,
         description=bot.description,
-        source_ids=bot.source_ids,
+        source_ids=bot.source_ids,  # Keep for backward compatibility
         created_by_admin_id=bot.created_by_admin_id,
         is_public=bot.is_public,
         allowed_user_ids=bot.allowed_user_ids,
@@ -297,29 +297,27 @@ async def update_bot(
             detail="Not authorized to modify this bot"
         )
     
-    # Verify source IDs if provided
-    if bot_data.source_ids is not None:
-        if bot_data.source_ids:
-            source_query = select(Source).where(
-                Source.source_id.in_(bot_data.source_ids),
-                Source.is_active == True
-            )
-            result = await db.execute(source_query)
-            found_sources = result.scalars().all()
-            
-            if len(found_sources) != len(bot_data.source_ids):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="One or more source IDs are invalid or inactive"
-                )
+    # Extract ALL bot attributes early to avoid greenlet issues
+    bot_id_value = bot.bot_id
+    bot_name = bot.name
+    bot_description = bot.description
+    bot_source_ids = bot.source_ids
+    bot_created_by_admin_id = bot.created_by_admin_id
+    bot_is_public = bot.is_public
+    bot_allowed_user_ids = bot.allowed_user_ids
+    bot_created_at = bot.created_at
+    bot_updated_at = bot.updated_at
     
-    # Update fields
+    # Update basic bot fields and track changes
+    updated_name = bot_data.name if bot_data.name is not None else bot_name
+    updated_description = bot_data.description if bot_data.description is not None else bot_description
+    updated_is_public = bot_data.is_public if bot_data.is_public is not None else bot_is_public
+    updated_allowed_user_ids = bot_data.allowed_user_ids if bot_data.allowed_user_ids is not None else bot_allowed_user_ids
+    
     if bot_data.name is not None:
         bot.name = bot_data.name
     if bot_data.description is not None:
         bot.description = bot_data.description
-    if bot_data.source_ids is not None:
-        bot.source_ids = bot_data.source_ids
     if bot_data.is_public is not None:
         bot.is_public = bot_data.is_public
     if bot_data.allowed_user_ids is not None:
@@ -329,7 +327,8 @@ async def update_bot(
         # First, remove existing access
         delete_query = select(UserBotAccess).where(UserBotAccess.bot_id == bot_id)
         delete_result = await db.execute(delete_query)
-        for access in delete_result.scalars().all():
+        existing_access = delete_result.scalars().all()
+        for access in existing_access:
             await db.delete(access)
         
         # Add new access records if not public
@@ -337,32 +336,147 @@ async def update_bot(
             for user_id in bot_data.allowed_user_ids:
                 access = UserBotAccess(
                     user_id=user_id,
-                    bot_id=bot.bot_id,
-                    granted_at=datetime.now(timezone.utc),
-                    granted_by_admin_id=user.user_id
+                    bot_id=bot_id_value,  # Use extracted value instead of bot.bot_id
+                    granted_at=datetime.now(timezone.utc)
                 )
                 db.add(access)
     
-    bot.updated_at = datetime.now(timezone.utc)
+    # Handle source updates
+    if bot_data.sources is not None:
+        # Get current bot sources
+        current_sources_query = select(Source).where(
+            Source.owner_bot_id == bot_id,
+            Source.is_active == True
+        )
+        current_sources_result = await db.execute(current_sources_query)
+        current_sources_list = current_sources_result.scalars().all()
+        
+        # Extract ALL source data early to avoid greenlet issues
+        current_sources_data = {}
+        for source in current_sources_list:
+            source_id_str = str(source.source_id)
+            current_sources_data[source_id_str] = {
+                'object': source,
+                'source_id': source.source_id,
+                'name': source.name,
+                'description': source.description,
+                'instructions': source.instructions,
+                'server_url': source.server_url,
+                'created_at': source.created_at,
+                'updated_at': source.updated_at
+            }
+        
+        updated_source_ids = []
+        
+        for source_update in bot_data.sources:
+            if source_update.source_id:
+                # Update existing source
+                source_id_str = str(source_update.source_id)
+                if source_id_str in current_sources_data:
+                    source_data = current_sources_data[source_id_str]
+                    source = source_data['object']
+                    source_id_value = source_data['source_id']  # Use extracted value
+                    
+                    source.name = source_update.name
+                    source.description = source_update.description
+                    source.instructions = source_update.instructions
+                    source.server_url = source_update.server_url
+                    source.updated_at = datetime.now(timezone.utc)
+                    
+                    # Update credentials if provided
+                    if source_update.credentials and source_update.credentials.get("api_key"):
+                        try:
+                            await store_source_credentials(
+                                db=db,
+                                source_id=source_id_value,  # Use extracted value
+                                credentials=source_update.credentials
+                            )
+                        except Exception as e:
+                            logger.error("Failed to update source credentials", 
+                                       source_id=source_id_value, error=str(e))  # Use extracted value
+                    
+                    updated_source_ids.append(source_id_value)  # Use extracted value
+            else:
+                # Create new source
+                try:
+                    server_type = MCPServerType(source_update.server_type)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid server type: {source_update.server_type}"
+                    )
+                
+                source_id = uuid.uuid4()
+                new_source = Source(
+                    source_id=source_id,
+                    name=source_update.name,
+                    description=source_update.description,
+                    instructions=source_update.instructions,
+                    server_type=server_type,
+                    server_url=source_update.server_url,
+                    owner_user_id=None,
+                    owner_bot_id=bot_id,
+                    is_active=True,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
+                )
+                
+                db.add(new_source)
+                await db.flush()  # Get the source ID
+                
+                # Store credentials for new source
+                if source_update.credentials:
+                    try:
+                        await store_source_credentials(
+                            db=db,
+                            source_id=source_id,
+                            credentials=source_update.credentials
+                        )
+                    except Exception as e:
+                        logger.error("Failed to store new source credentials", 
+                                   source_id=source_id, error=str(e))
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to store credentials for new source: {source_update.name}"
+                        )
+                
+                updated_source_ids.append(source_id)
+        
+        # Deactivate sources not in the update list
+        for source_id_str, source_data in current_sources_data.items():
+            source_id_value = source_data['source_id']  # Use extracted value
+            if source_id_value not in updated_source_ids:
+                source = source_data['object']
+                source.is_active = False
+                source.updated_at = datetime.now(timezone.utc)
+        
+        # Update bot's source_ids list
+        bot.source_ids = updated_source_ids
+        final_source_ids = updated_source_ids
+    else:
+        final_source_ids = bot_source_ids
+    
+    final_updated_at = datetime.now(timezone.utc)
+    bot.updated_at = final_updated_at
     await db.commit()
     
     logger.info(
         "Bot updated",
-        bot_id=bot.bot_id,
-        name=bot.name,
+        bot_id=bot_id_value,   # Use extracted value
+        name=updated_name,     # Use tracked value
         updated_by=user.user_id
     )
     
     return BotResponse(
-        bot_id=bot.bot_id,
-        name=bot.name,
-        description=bot.description,
-        source_ids=bot.source_ids,
-        created_by_admin_id=bot.created_by_admin_id,
-        is_public=bot.is_public,
-        allowed_user_ids=bot.allowed_user_ids,
-        created_at=bot.created_at,
-        updated_at=bot.updated_at
+        bot_id=bot_id_value,                    # Use extracted value
+        name=updated_name,                      # Use tracked value
+        description=updated_description,        # Use tracked value
+        source_ids=final_source_ids,           # Use tracked value
+        created_by_admin_id=bot_created_by_admin_id,  # Use extracted value
+        is_public=updated_is_public,           # Use tracked value
+        allowed_user_ids=updated_allowed_user_ids,    # Use tracked value
+        created_at=bot_created_at,             # Use extracted value
+        updated_at=final_updated_at            # Use tracked value
     )
 
 
@@ -393,6 +507,9 @@ async def delete_bot(
             detail="Not authorized to delete this bot"
         )
     
+    # Extract values early to avoid greenlet issues
+    bot_name = bot.name
+    
     # Delete user access records
     access_query = select(UserBotAccess).where(UserBotAccess.bot_id == bot_id)
     access_result = await db.execute(access_query)
@@ -406,7 +523,7 @@ async def delete_bot(
     logger.info(
         "Bot deleted",
         bot_id=bot_id,
-        name=bot.name,
+        name=bot_name,  # Use extracted value
         deleted_by=user.user_id
     )
     
@@ -454,10 +571,11 @@ async def grant_bot_access(
         )
     
     # Create access record
+    now = datetime.now(timezone.utc)
     access = UserBotAccess(
         user_id=user_id,
         bot_id=bot_id,
-        granted_at=datetime.now(timezone.utc),
+        granted_at=now,
         granted_by_admin_id=user.user_id
     )
     
@@ -472,10 +590,10 @@ async def grant_bot_access(
     )
     
     return UserBotAccessResponse(
-        user_id=access.user_id,
-        bot_id=access.bot_id,
-        granted_at=access.granted_at,
-        granted_by_admin_id=access.granted_by_admin_id
+        user_id=user_id,  # Use parameter instead of access.user_id
+        bot_id=bot_id,    # Use parameter instead of access.bot_id
+        granted_at=now,   # Use extracted value
+        granted_by_admin_id=user.user_id  # Use direct value
     )
 
 

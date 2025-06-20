@@ -8,6 +8,7 @@ export const useScintilla = () => {
   const [currentConversationId, setCurrentConversationId] = useState(null)
   const [error, setError] = useState(null)
   const [onConversationCreated, setOnConversationCreated] = useState(null)
+  const [isSavingConversation, setIsSavingConversation] = useState(false)
 
   // Check backend connection on mount
   useEffect(() => {
@@ -64,9 +65,15 @@ export const useScintilla = () => {
 
   const sendMessage = useCallback(async (message, options = {}) => {
     if (!message.trim()) return
+    
+    // Prevent sending messages while conversation is being saved
+    if (isSavingConversation) {
+      console.log('⏳ Conversation being saved, waiting...')
+      return
+    }
 
     const userMessage = {
-      id: Date.now(),
+      id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       role: 'user',
       content: message,
       timestamp: new Date()
@@ -93,6 +100,12 @@ export const useScintilla = () => {
         ...options
       }
 
+      console.log('🔍 Query options being sent:', {
+        conversation_id: currentConversationId,
+        message_length: message.length,
+        has_conversation_id: !!currentConversationId
+      })
+
       if (queryOptions.stream) {
         await handleStreamingResponse(message, queryOptions, queryStartTime)
       } else {
@@ -108,7 +121,7 @@ export const useScintilla = () => {
       
       // Add error message to chat
       const errorMessage = {
-        id: Date.now() + 1,
+        id: `error-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         role: 'assistant',
         content: `Sorry, I encountered an error: ${err.message}. Please try again.`,
         timestamp: new Date(),
@@ -118,11 +131,11 @@ export const useScintilla = () => {
     } finally {
       setIsLoading(false)
     }
-  }, [currentConversationId])
+  }, [currentConversationId, isSavingConversation])
 
   const handleStreamingResponse = async (originalMessage, options, queryStartTime) => {
     const assistantMessage = {
-      id: Date.now() + 1,
+      id: `assistant-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       role: 'assistant',
       content: '',
       timestamp: new Date(),
@@ -216,13 +229,16 @@ export const useScintilla = () => {
           fullContent += chunk.content
           setMessages(prev => prev.map(msg => 
             msg.id === assistantMessage.id 
-              ? { ...msg, content: fullContent, isThinking: false }
+              ? { ...msg, content: fullContent, isThinking: false, isStreaming: true }
               : msg
           ))
         } else if (chunk.type === 'final_response') {
           finalResponseTime = chunkTime
           const timeToFinalResponse = chunkTime - queryStartTime
           console.log(`✅ Final response received after ${timeToFinalResponse}ms`)
+          
+          // Set saving flag when final response is received
+          setIsSavingConversation(true)
           
           fullContent = chunk.content
           setMessages(prev => prev.map(msg => 
@@ -242,17 +258,20 @@ export const useScintilla = () => {
               : msg
           ))
         } else if (chunk.type === 'conversation_saved') {
-          // Handle conversation creation/update
-          if (chunk.conversation_id && chunk.conversation_id !== currentConversationId) {
+          // Always update conversation ID when we receive a conversation_saved event
+          if (chunk.conversation_id) {
             const newConversationId = chunk.conversation_id
             console.log(`💾 Conversation saved: ${newConversationId}`)
             setCurrentConversationId(newConversationId)
             
-            // Notify parent component about new conversation
-            if (onConversationCreated) {
+            // Notify parent component about new conversation (only if it's actually new)
+            if (newConversationId !== currentConversationId && onConversationCreated) {
               onConversationCreated(newConversationId)
             }
           }
+          
+          // Clear saving flag when conversation is saved
+          setIsSavingConversation(false)
         } else if (chunk.type === 'complete') {
           const completeTime = chunkTime
           const totalQueryTime = completeTime - queryStartTime
@@ -334,7 +353,7 @@ export const useScintilla = () => {
       const response = await api.query(options)
       
       const assistantMessage = {
-        id: Date.now() + 1,
+        id: `assistant-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         role: 'assistant',
         content: response.content || 'No response received',
         timestamp: new Date(),
@@ -363,6 +382,7 @@ export const useScintilla = () => {
     isConnected,
     error,
     currentConversationId,
+    isSavingConversation,
     sendMessage,
     clearMessages,
     retryConnection,

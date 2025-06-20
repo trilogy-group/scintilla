@@ -19,39 +19,20 @@ from src.db.base import get_db_session
 from src.db.models import User, Source, MCPServerType, CredentialType
 from src.db.mcp_credentials import get_user_sources_with_credentials, store_source_credentials
 from src.auth.mock import get_current_user
-from src.db.mcp_tool_cache import MCPToolCacheManager
+from src.db.tool_cache import ToolCacheService
+from src.api.models import SourceCreate, SourceResponse
 
 logger = structlog.get_logger()
 router = APIRouter()
 
 
 # Request/Response Models
-class SourceCreate(BaseModel):
-    """Request to create a new source"""
-    name: str = Field(..., description="Display name for the source")
-    server_type: str = Field(..., description="Type of MCP server (CUSTOM_SSE)")
-    server_url: str = Field(..., description="Base URL of the MCP server")
-    credentials: Dict[str, str] = Field(..., description="Credential fields")
-    description: Optional[str] = None
-
 class SourceUpdate(BaseModel):
     """Request to update a source"""
     name: Optional[str] = None
     description: Optional[str] = None
+    instructions: Optional[str] = None
     credentials: Optional[Dict[str, str]] = None
-
-class SourceResponse(BaseModel):
-    """Source information response"""
-    source_id: uuid.UUID
-    name: str
-    description: Optional[str]
-    server_type: str
-    server_url: str
-    owner_user_id: uuid.UUID
-    is_active: bool
-    created_at: datetime
-    updated_at: Optional[datetime]
-    # Note: credentials are not included in response for security
 
 class SourceWithStatusResponse(SourceResponse):
     """Source response with connection status"""
@@ -86,9 +67,11 @@ async def create_source(
         source_id=source_id,
         name=source_data.name,
         description=source_data.description,
+        instructions=source_data.instructions,
         server_type=server_type,
         server_url=source_data.server_url,
         owner_user_id=user.user_id,
+        owner_bot_id=None,  # User-owned source
         is_active=True,
         created_at=created_at,
         updated_at=created_at
@@ -121,13 +104,32 @@ async def create_source(
         owner_user_id=user.user_id
     )
     
+    # Asynchronously cache tools for this source (don't block the response)
+    try:
+        cache_result = await ToolCacheService.cache_tools_for_source(db, source_id)
+        if cache_result["success"]:
+            logger.info("Tools cached for new source", 
+                       source_id=source_id, 
+                       tool_count=cache_result["cached_tools"],
+                       cache_time_ms=cache_result["cache_time_ms"])
+        else:
+            logger.warning("Failed to cache tools for new source",
+                          source_id=source_id,
+                          error=cache_result["error"])
+    except Exception as e:
+        logger.warning("Tool caching failed for new source",
+                      source_id=source_id,
+                      error=str(e))
+    
     return SourceResponse(
         source_id=source_id,
         name=source_data.name,
         description=source_data.description,
+        instructions=source_data.instructions,
         server_type=server_type.value,
         server_url=source_data.server_url,
         owner_user_id=user.user_id,
+        owner_bot_id=None,
         is_active=True,
         created_at=created_at,
         updated_at=created_at
@@ -154,9 +156,11 @@ async def list_user_sources(
             source_id=source.source_id,
             name=source.name,
             description=source.description,
+            instructions=source.instructions,
             server_type=source.server_type.value,
             server_url=source.server_url,
             owner_user_id=source.owner_user_id,
+            owner_bot_id=source.owner_bot_id,
             is_active=source.is_active,
             created_at=source.created_at,
             updated_at=source.updated_at
@@ -191,9 +195,11 @@ async def get_source(
         source_id=source.source_id,
         name=source.name,
         description=source.description,
+        instructions=source.instructions,
         server_type=source.server_type.value,
         server_url=source.server_url,
         owner_user_id=source.owner_user_id,
+        owner_bot_id=source.owner_bot_id,
         is_active=source.is_active,
         created_at=source.created_at,
         updated_at=source.updated_at
@@ -226,9 +232,11 @@ async def update_source(
     # Capture original values
     original_name = source.name
     original_description = source.description
+    original_instructions = source.instructions
     original_server_type = source.server_type
     original_server_url = source.server_url
     original_owner_user_id = source.owner_user_id
+    original_owner_bot_id = source.owner_bot_id
     original_is_active = source.is_active
     original_created_at = source.created_at
     
@@ -238,10 +246,13 @@ async def update_source(
         source.name = source_data.name
     if source_data.description is not None:
         source.description = source_data.description
+    if source_data.instructions is not None:
+        source.instructions = source_data.instructions
     
     source.updated_at = updated_at
     
     # Update credentials if provided
+    credentials_updated = False
     if source_data.credentials is not None:
         try:
             await store_source_credentials(
@@ -249,6 +260,7 @@ async def update_source(
                 source_id=source_id,
                 credentials=source_data.credentials
             )
+            credentials_updated = True
         except Exception as e:
             logger.error("Failed to update source credentials", error=str(e))
             raise HTTPException(
@@ -258,9 +270,28 @@ async def update_source(
     
     await db.commit()
     
+    # If credentials were updated, refresh the tool cache
+    if credentials_updated:
+        try:
+            cache_result = await ToolCacheService.cache_tools_for_source(db, source_id, force_refresh=True)
+            if cache_result["success"]:
+                logger.info("Tools refreshed for updated source", 
+                           source_id=source_id, 
+                           tool_count=cache_result["cached_tools"],
+                           cache_time_ms=cache_result["cache_time_ms"])
+            else:
+                logger.warning("Failed to refresh tools for updated source",
+                              source_id=source_id,
+                              error=cache_result["error"])
+        except Exception as e:
+            logger.warning("Tool refresh failed for updated source",
+                          source_id=source_id,
+                          error=str(e))
+    
     # Use captured or updated values
     final_name = source_data.name if source_data.name is not None else original_name
     final_description = source_data.description if source_data.description is not None else original_description
+    final_instructions = source_data.instructions if source_data.instructions is not None else original_instructions
     
     logger.info(
         "Source updated",
@@ -273,9 +304,11 @@ async def update_source(
         source_id=source_id,
         name=final_name,
         description=final_description,
+        instructions=final_instructions,
         server_type=original_server_type.value,
         server_url=original_server_url,
         owner_user_id=original_owner_user_id,
+        owner_bot_id=original_owner_bot_id,
         is_active=original_is_active,
         created_at=original_created_at,
         updated_at=updated_at
@@ -351,9 +384,11 @@ async def get_source_status(
         source_id=source_config['source_id'],
         name=source_config['name'],
         description=None,  # Not included in config
+        instructions=None,  # Not included in config
         server_type=source_config['server_type'].value if hasattr(source_config['server_type'], 'value') else str(source_config['server_type']),
         server_url=source_config['server_url'],
         owner_user_id=user.user_id,
+        owner_bot_id=None,  # Not available in config
         is_active=True,  # Assumed active since it's returned
         created_at=datetime.utcnow(),  # Not available in config
         updated_at=datetime.utcnow(),  # Not available in config
@@ -451,38 +486,166 @@ async def test_source_connection(
 
 @router.post("/refresh-cache")
 async def refresh_tool_cache(
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session)
 ):
     """
-    Refresh the MCP tool cache for the current user
-    
-    This will invalidate the current cache and force a fresh
-    load of tools on the next query.
+    Refresh cached tools for all user sources
     """
-    async with get_db_session() as db:
-        try:
-            # Invalidate all cache entries for this user
-            entries_removed = await MCPToolCacheManager.invalidate_user_cache(db, user.user_id)
-            
-            logger.info(
-                "Refreshed MCP tool cache for user",
-                user_id=user.user_id,
-                entries_removed=entries_removed
-            )
-            
+    try:
+        # Get user's sources
+        query = select(Source).where(
+            Source.owner_user_id == user.user_id,
+            Source.is_active == True
+        )
+        result = await db.execute(query)
+        user_sources = result.scalars().all()
+        
+        if not user_sources:
             return {
                 "success": True,
-                "message": f"Tool cache refreshed. {entries_removed} cache entries cleared.",
-                "entries_removed": entries_removed
+                "message": "No sources found for user",
+                "refreshed_sources": 0,
+                "total_tools": 0
+            }
+        
+        refreshed_count = 0
+        total_tools = 0
+        errors = []
+        
+        for source in user_sources:
+            try:
+                cache_result = await ToolCacheService.cache_tools_for_source(
+                    db, source.source_id, force_refresh=True
+                )
+                
+                if cache_result["success"]:
+                    refreshed_count += 1
+                    total_tools += cache_result["cached_tools"]
+                    logger.info("Refreshed tools for source",
+                               source_id=source.source_id,
+                               source_name=source.name,
+                               tool_count=cache_result["cached_tools"])
+                else:
+                    errors.append({
+                        "source_id": str(source.source_id),
+                        "source_name": source.name,
+                        "error": cache_result["error"]
+                    })
+                    
+            except Exception as e:
+                errors.append({
+                    "source_id": str(source.source_id),
+                    "source_name": source.name,
+                    "error": str(e)
+                })
+        
+        return {
+            "success": True,
+            "message": f"Refreshed tools for {refreshed_count}/{len(user_sources)} sources",
+            "refreshed_sources": refreshed_count,
+            "total_sources": len(user_sources),
+            "total_tools": total_tools,
+            "errors": errors if errors else None
+        }
+        
+    except Exception as e:
+        logger.error("Failed to refresh tool cache", user_id=user.user_id, error=str(e))
+        return {
+            "success": False,
+            "message": f"Failed to refresh tool cache: {str(e)}",
+            "refreshed_sources": 0,
+            "total_tools": 0
+        }
+
+
+@router.post("/sources/{source_id}/refresh-tools")
+async def refresh_source_tools(
+    source_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    Refresh cached tools for a specific source (user-owned or bot-owned if user has access)
+    """
+    # Get the source
+    query = select(Source).where(Source.source_id == source_id)
+    result = await db.execute(query)
+    source = result.scalar_one_or_none()
+    
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source not found"
+        )
+    
+    # Extract ALL source attributes early to avoid greenlet issues
+    source_name = source.name
+    source_owner_user_id = source.owner_user_id
+    source_owner_bot_id = source.owner_bot_id
+    
+    # Check access permissions
+    has_access = False
+    
+    if source_owner_user_id == user.user_id:
+        # User owns the source directly
+        has_access = True
+    elif source_owner_bot_id:
+        # Check if user has access to the bot that owns this source
+        from src.db.models import Bot, UserBotAccess
+        from sqlalchemy import or_
+        
+        bot_query = select(Bot).where(Bot.bot_id == source_owner_bot_id)
+        bot_result = await db.execute(bot_query)
+        bot = bot_result.scalar_one_or_none()
+        
+        if bot:
+            # Extract bot attributes early too
+            bot_is_public = bot.is_public
+            bot_bot_id = bot.bot_id
+            
+            if bot_is_public:
+                has_access = True
+            else:
+                # Check explicit access
+                access_query = select(UserBotAccess).where(
+                    UserBotAccess.user_id == user.user_id,
+                    UserBotAccess.bot_id == bot_bot_id
+                )
+                access_result = await db.execute(access_query)
+                has_access = access_result.scalar_one_or_none() is not None
+    
+    if not has_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to refresh tools for this source"
+        )
+    
+    try:
+        cache_result = await ToolCacheService.cache_tools_for_source(
+            db, source_id, force_refresh=True
+        )
+        
+        if cache_result["success"]:
+            return {
+                "success": True,
+                "message": f"Tools refreshed for source '{source_name}'",  # Use extracted value
+                "cached_tools": cache_result["cached_tools"],
+                "cache_time_ms": cache_result["cache_time_ms"],
+                "status": cache_result["status"]
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Failed to refresh tools: {cache_result['error']}",
+                "cached_tools": 0
             }
             
-        except Exception as e:
-            logger.error(
-                "Failed to refresh tool cache",
-                user_id=user.user_id,
-                error=str(e)
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to refresh tool cache: {str(e)}"
-            ) 
+    except Exception as e:
+        logger.error("Failed to refresh source tools", 
+                    source_id=source_id, error=str(e))
+        return {
+            "success": False,
+            "message": f"Failed to refresh tools: {str(e)}",
+            "cached_tools": 0
+        } 

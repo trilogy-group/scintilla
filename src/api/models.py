@@ -2,47 +2,39 @@
 Pydantic models for API requests and responses
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 from uuid import UUID
+from datetime import datetime
 
 
 class QueryRequest(BaseModel):
-    """Request model for the main query endpoint"""
-    
-    message: str = Field(..., description="User's query message")
-    conversation_id: Optional[UUID] = Field(None, description="Existing conversation ID")
-    bot_ids: List[UUID] = Field(default_factory=list, description="Bot IDs to use for tools")
-    use_user_sources: bool = Field(default=True, description="Whether to include user's personal sources")
-    
-    # Query mode and behavior
-    mode: str = Field(default="conversational", description="Query mode: 'conversational' or 'search'")
-    require_sources: bool = Field(default=True, description="Require evidence from multiple sources")
-    min_sources: int = Field(default=2, description="Minimum number of sources to search")
-    search_depth: str = Field(default="thorough", description="Search depth: 'quick', 'thorough', 'exhaustive'")
-    
-    # LLM configuration
-    llm_provider: Optional[str] = Field(None, description="LLM provider: 'openai' or 'anthropic'")
-    llm_model: Optional[str] = Field(None, description="Specific model to use")
-    
-    # Optional settings
-    stream: bool = Field(True, description="Whether to stream the response")
+    """Chat query request"""
+    message: str = Field(..., description="User message/query")
+    conversation_id: Optional[UUID] = Field(None, description="Conversation ID (optional for new conversations)")
+    mode: Optional[str] = Field("conversational", description="Query mode")
+    stream: Optional[bool] = Field(True, description="Enable streaming response")
+    requireSources: Optional[bool] = Field(False, description="Require sources in response")
+    minSources: Optional[int] = Field(2, description="Minimum number of sources")
+    searchDepth: Optional[str] = Field("thorough", description="Search depth")
+    use_user_sources: Optional[bool] = Field(True, description="Use user sources")
+    selected_sources: Optional[List[UUID]] = Field(None, description="Optional list of source IDs to use")
+    selected_bots: Optional[List[UUID]] = Field(None, description="Optional list of bot IDs to use")
+    bot_ids: Optional[List[UUID]] = Field(None, description="Bot IDs for compatibility")
+    llm_provider: Optional[str] = Field(None, description="LLM provider")
+    llm_model: Optional[str] = Field(None, description="LLM model")
 
 
 class QueryResponse(BaseModel):
-    """Response model for successful query"""
-    
-    conversation_id: UUID = Field(..., description="Conversation ID")
-    message_id: int = Field(..., description="Message ID")
-    content: str = Field(..., description="Response content")
-    
-    # LLM metadata
-    llm_provider: str = Field(..., description="LLM provider used")
-    llm_model: str = Field(..., description="Model used")
-    
-    # Tool usage
-    tools_used: List[str] = Field(default_factory=list, description="Names of tools used")
-    citations: Optional[List[Dict[str, Any]]] = Field(None, description="Source citations")
+    """Chat query response"""
+    message_id: UUID
+    conversation_id: UUID
+    content: str
+    llm_provider: Optional[str]
+    llm_model: Optional[str]
+    tools_used: Optional[List[str]]
+    citations: Optional[List[Dict[str, Any]]]
+    created_at: datetime
 
 
 class StreamChunk(BaseModel):
@@ -64,69 +56,56 @@ class StreamChunk(BaseModel):
     error: Optional[str] = Field(None, description="Error message")
 
 
+class BotSourceCreate(BaseModel):
+    """Request to create a new source for a bot"""
+    name: str = Field(..., description="Display name for the source")
+    server_type: Literal["CUSTOM_SSE", "DIRECT_SSE", "WEBSOCKET"] = Field(..., description="Type of MCP server")
+    server_url: str = Field(..., description="Base URL of the MCP server")
+    credentials: Dict[str, str] = Field(..., description="Credential fields")
+    description: Optional[str] = None
+    instructions: Optional[str] = None  # Instructions for how this source should be used
+
+
 class BotCreate(BaseModel):
-    """Request model for creating a bot"""
-    
-    display_name: str = Field(..., description="Bot display name")
-    description: Optional[str] = Field(None, description="Bot description")
-    is_public: bool = Field(False, description="Whether bot is public")
+    """Request to create a new bot with dedicated sources"""
+    name: str = Field(..., description="Display name for the bot")
+    description: Optional[str] = None
+    sources: List[BotSourceCreate] = Field(..., description="List of sources to create for this bot")
+    is_public: bool = Field(default=False, description="Whether the bot is publicly accessible")
+    allowed_user_ids: Optional[List[UUID]] = Field(default=None, description="User IDs allowed to access this bot (if not public)")
 
 
-class BotEndpointCreate(BaseModel):
-    """Request model for adding an MCP endpoint to a bot"""
-    
-    mcp_url: str = Field(..., description="Full MCP URL with API key")
-    name: Optional[str] = Field(None, description="Friendly name for endpoint")
-    description: Optional[str] = Field(None, description="Endpoint description")
+class BotSourceUpdate(BaseModel):
+    """Request to update or add a source to a bot"""
+    source_id: Optional[UUID] = None  # If provided, update existing source
+    name: str = Field(..., description="Display name for the source")
+    server_type: Literal["CUSTOM_SSE", "DIRECT_SSE", "WEBSOCKET"] = Field(..., description="Type of MCP server")
+    server_url: str = Field(..., description="Base URL of the MCP server")
+    credentials: Optional[Dict[str, str]] = None  # Optional for existing sources
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+
+
+class BotUpdate(BaseModel):
+    """Request to update a bot"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_public: Optional[bool] = None
+    allowed_user_ids: Optional[List[UUID]] = None
+    sources: Optional[List[BotSourceUpdate]] = None  # Allow updating sources
 
 
 class BotResponse(BaseModel):
-    """Response model for bot information"""
-    
-    bot_id: UUID = Field(..., description="Bot ID")
-    display_name: str = Field(..., description="Bot display name")
-    description: Optional[str] = Field(None, description="Bot description")
-    is_public: bool = Field(..., description="Whether bot is public")
-    owner_email: str = Field(..., description="Bot owner email")
-    
-    # Endpoint information
-    endpoint_count: int = Field(..., description="Number of MCP endpoints")
-    tool_count: Optional[int] = Field(None, description="Total number of tools available")
-    
-    # Timestamps
-    created_at: str = Field(..., description="Creation timestamp")
-    updated_at: Optional[str] = Field(None, description="Last update timestamp")
-
-
-class BotEndpointResponse(BaseModel):
-    """Response model for bot endpoint information"""
-    
-    endpoint_id: UUID = Field(..., description="Endpoint ID")
-    bot_id: UUID = Field(..., description="Bot ID")
-    sse_url: str = Field(..., description="SSE URL (without API key)")
-    name: Optional[str] = Field(None, description="Endpoint name")
-    description: Optional[str] = Field(None, description="Endpoint description")
-    
-    # Health status
-    is_active: bool = Field(..., description="Whether endpoint is active")
-    is_healthy: Optional[bool] = Field(None, description="Health check status")
-    last_health_check: Optional[str] = Field(None, description="Last health check time")
-    health_error: Optional[str] = Field(None, description="Last health error")
-    
-    # Tool information
-    tool_count: Optional[int] = Field(None, description="Number of tools available")
-    tools: Optional[List[str]] = Field(None, description="Available tool names")
-
-
-class ToolStatus(BaseModel):
-    """Status of MCP tools and servers"""
-    
-    total_tools: int = Field(..., description="Total number of tools available")
-    server_count: int = Field(..., description="Number of MCP servers")
-    healthy_servers: int = Field(..., description="Number of healthy servers")
-    
-    tools: List[Dict[str, Any]] = Field(..., description="Tool information")
-    servers: List[Dict[str, Any]] = Field(..., description="Server status")
+    """Bot information response"""
+    bot_id: UUID
+    name: str
+    description: Optional[str]
+    source_ids: List[UUID]  # Keep for backward compatibility
+    created_by_admin_id: UUID
+    is_public: bool
+    allowed_user_ids: List[UUID]
+    created_at: datetime
+    updated_at: Optional[datetime]
 
 
 class ErrorResponse(BaseModel):
@@ -134,4 +113,89 @@ class ErrorResponse(BaseModel):
     
     error: str = Field(..., description="Error message")
     error_type: Optional[str] = Field(None, description="Error type")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details") 
+    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+
+
+class SourceCreate(BaseModel):
+    """Request to create a new source"""
+    name: str = Field(..., description="Display name for the source")
+    server_type: Literal["CUSTOM_SSE", "DIRECT_SSE", "WEBSOCKET"] = Field(..., description="Type of MCP server")
+    server_url: str = Field(..., description="Base URL of the MCP server")
+    credentials: Dict[str, str] = Field(..., description="Credential fields")
+    description: Optional[str] = None
+    instructions: Optional[str] = None  # Instructions for bot usage
+
+
+class SourceResponse(BaseModel):
+    """Source information response"""
+    source_id: UUID
+    name: str
+    description: Optional[str]
+    instructions: Optional[str]
+    server_type: str
+    server_url: str
+    owner_user_id: Optional[UUID]
+    owner_bot_id: Optional[UUID]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class BotWithSourcesResponse(BotResponse):
+    """Bot response with source details"""
+    sources: List[SourceResponse]  # Full source information
+    tool_count: Optional[int]
+    user_has_access: bool
+
+
+class ConversationCreate(BaseModel):
+    """Request to create a new conversation"""
+    title: Optional[str] = None
+
+
+class ConversationResponse(BaseModel):
+    """Conversation information response"""
+    conversation_id: UUID
+    user_id: UUID
+    title: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class MessageCreate(BaseModel):
+    """Request to create a new message"""
+    content: str = Field(..., description="Message content")
+    conversation_id: Optional[UUID] = Field(None, description="Conversation ID (optional for new conversations)")
+
+
+class MessageResponse(BaseModel):
+    """Message information response"""
+    message_id: UUID
+    conversation_id: UUID
+    role: str
+    content: str
+    llm_provider: Optional[str]
+    llm_model: Optional[str]
+    tools_used: Optional[List[str]]
+    citations: Optional[List[Dict[str, Any]]]
+    created_at: datetime
+
+
+class DeleteResponse(BaseModel):
+    """Standard delete response"""
+    message: str = "Resource deleted successfully"
+
+
+class UserBotAccessResponse(BaseModel):
+    """User bot access information"""
+    user_id: UUID
+    bot_id: UUID
+    granted_at: datetime
+    granted_by_admin_id: UUID
+
+
+class HealthResponse(BaseModel):
+    """Health check response"""
+    status: str = "healthy"
+    timestamp: datetime
+    version: Optional[str] = None 

@@ -17,6 +17,7 @@ from src.db.base import get_db_session
 from src.db.models import User, MCPServerType, CredentialType
 from src.db.mcp_credentials import MCPCredentialManager
 from src.auth.mock import get_current_user
+# Removed global_mcp import - using FastMCPAgent approach
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -320,4 +321,49 @@ async def test_bot_mcp_connection(
             "tool_count": 0,
             "loaded_servers": [],
             "available_tools": []
-        } 
+        }
+
+@router.get("/mcp/status")
+async def get_mcp_cache_status(user: User = Depends(get_current_user)):
+    """Get MCP tool status (FastMCP approach)"""
+    return {
+        "success": True,
+        "status": {
+            "system_ready": True,
+            "architecture": "fast_database_cached",
+            "caching": "source_tools_table_based",
+            "description": "Tools cached in source_tools table, loaded on-demand from database"
+        }
+    }
+
+
+@router.post("/mcp/refresh")
+async def trigger_mcp_refresh(user: User = Depends(get_current_user)):
+    """Refresh user's MCP tools (no caching - loads fresh from sources)"""
+    return {
+        "success": True,
+        "message": f"Tools load fresh from sources for user {user.user_id} - no caching needed"
+    }
+
+
+@router.post("/mcp/invalidate")
+async def invalidate_mcp_cache(user: User = Depends(get_current_user)):
+    """Invalidate user's MCP tool cache (no-op in simple mode)"""
+    return {
+        "success": True,
+        "message": f"Tools load fresh from sources for user {user.user_id} - no cache to invalidate"
+    }
+
+
+@router.post("/mcp/invalidate-all")
+async def invalidate_all_mcp_caches(user: User = Depends(get_current_user)):
+    """Invalidate all MCP tool caches (no-op in simple mode)"""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    return {
+        "success": True,
+        "message": "Tools load fresh from sources - no cache to invalidate",
+        "cleared_count": 0
+    }
+     

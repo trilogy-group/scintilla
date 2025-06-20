@@ -169,6 +169,77 @@ class MCPCredentialManager:
                 error=str(e)
             )
             return None
+
+    @staticmethod
+    async def get_source_credential_objects(
+        db: AsyncSession,
+        source_id: uuid.UUID
+    ) -> Optional[List[MCPCredential]]:
+        """
+        Retrieve credential objects (with metadata) for a source
+        
+        Args:
+            db: Database session
+            source_id: Source ID to get credentials for
+            
+        Returns:
+            List of credential objects with decrypted values, or None if not found
+        """
+        try:
+            # Get all credentials for this source
+            result = await db.execute(
+                select(MCPCredential).where(MCPCredential.source_id == source_id)
+            )
+            credentials = result.scalars().all()
+            
+            if not credentials:
+                logger.warning("No credential objects found for source", source_id=source_id)
+                return None
+            
+            # Decrypt each credential and store back the decrypted value
+            decrypted_creds = []
+            
+            for cred in credentials:
+                try:
+                    decrypted_value = decrypt_string(cred.encrypted_value)
+                    # Create a simple object with the credential metadata and decrypted value
+                    class DecryptedCredential:
+                        def __init__(self, credential_type, field_name, credential_value):
+                            self.credential_type = credential_type
+                            self.field_name = field_name
+                            self.credential_value = credential_value
+                    
+                    decrypted_cred = DecryptedCredential(
+                        credential_type=cred.credential_type.value if hasattr(cred.credential_type, 'value') else str(cred.credential_type),
+                        field_name=cred.field_name,
+                        credential_value=decrypted_value
+                    )
+                    decrypted_creds.append(decrypted_cred)
+                    
+                except Exception as e:
+                    logger.error(
+                        "Failed to decrypt credential object",
+                        source_id=source_id,
+                        field_name=cred.field_name,
+                        error=str(e)
+                    )
+                    return None
+            
+            logger.debug(
+                "Retrieved credential objects for source",
+                source_id=source_id,
+                object_count=len(decrypted_creds)
+            )
+            
+            return decrypted_creds
+            
+        except Exception as e:
+            logger.error(
+                "Failed to get source credential objects",
+                source_id=source_id,
+                error=str(e)
+            )
+            return None
     
     @staticmethod
     async def get_user_sources_with_credentials(
@@ -265,26 +336,36 @@ class MCPCredentialManager:
             )
             sources = result.scalars().all()
             
+            # Extract ALL source attributes early to avoid greenlet issues
+            source_data = []
+            for source in sources:
+                source_data.append({
+                    "source_id": source.source_id,
+                    "name": source.name,
+                    "server_type": source.server_type,
+                    "server_url": source.server_url
+                })
+            
             configurations = []
             
-            for source in sources:
-                # Get decrypted credentials
-                credentials = await MCPCredentialManager.get_source_credentials(db, source.source_id)
+            for source_info in source_data:
+                # Get decrypted credentials using extracted source_id
+                credentials = await MCPCredentialManager.get_source_credentials(db, source_info["source_id"])
                 
                 if credentials:
                     config = {
-                        "source_id": source.source_id,
-                        "name": source.name,
-                        "server_type": source.server_type,
-                        "server_url": source.server_url,
+                        "source_id": source_info["source_id"],
+                        "name": source_info["name"],
+                        "server_type": source_info["server_type"],
+                        "server_url": source_info["server_url"],
                         "credentials": credentials
                     }
                     configurations.append(config)
                 else:
                     logger.warning(
                         "Source has no valid credentials, skipping",
-                        source_id=source.source_id,
-                        source_name=source.name
+                        source_id=source_info["source_id"],
+                        source_name=source_info["name"]
                     )
             
             logger.info(

@@ -32,7 +32,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.mcp_credentials import MCPCredentialManager
-from src.db.mcp_tool_cache import MCPToolCacheManager
+# MCPToolCacheManager removed - using simple source-based loading
 from src.agents.citations import SourceExtractor, CitationManager, Source
 
 logger = structlog.get_logger()
@@ -547,6 +547,69 @@ class MCPAgent:
         self.citation_manager: CitationManager = CitationManager()
         self._server_configs: Optional[Dict] = None  # Store configs for connection pooling
         self._cached_tools_metadata: Optional[Dict] = None  # Cache tool metadata for fast loading
+    
+    def _build_mcp_config(self, config: dict, source_name: str) -> Optional[dict]:
+        """
+        Build MCP client configuration for different server types
+        
+        Args:
+            config: Source configuration with credentials
+            source_name: Unique name for this source
+            
+        Returns:
+            MCP configuration dict or None if unsupported
+        """
+        server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
+        
+        if server_type_str == "CUSTOM_SSE":
+            # Legacy: Uses mcp-proxy with command line args (current Hive setup)
+            return {
+                "command": "mcp-proxy",
+                "args": [
+                    "--headers",
+                    "x-api-key",
+                    config["credentials"].get("api_key", ""),
+                    config["server_url"]
+                ],
+                "transport": "stdio"
+            }
+            
+        elif server_type_str == "DIRECT_SSE":
+            # New: Direct URL connection with headers (like Atlassian MCP)
+            headers = {}
+            
+            # Handle Bearer token (most common for external APIs)
+            if "bearer_token" in config["credentials"]:
+                headers["Authorization"] = f"Bearer {config['credentials']['bearer_token']}"
+            
+            # Handle API key header (alternative)
+            elif "api_key" in config["credentials"]:
+                headers["x-api-key"] = config["credentials"]["api_key"]
+            
+            # Handle custom headers JSON (most flexible)
+            elif "custom_headers" in config["credentials"]:
+                try:
+                    import json
+                    custom_headers = json.loads(config["credentials"]["custom_headers"])
+                    headers.update(custom_headers)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning(f"Invalid custom headers JSON for {source_name}", 
+                                 headers=config["credentials"].get("custom_headers"))
+            
+            return {
+                "url": config["server_url"],
+                "headers": headers,
+                "transport": "sse"
+            }
+            
+        elif server_type_str == "WEBSOCKET":
+            # Future: WebSocket connections
+            logger.warning(f"WebSocket support not implemented yet for {source_name}")
+            return None
+            
+        else:
+            logger.warning(f"Unsupported server type: {server_type_str} for {source_name}")
+            return None
         
     async def _create_mcp_client_from_configs(self, server_configs: Dict) -> MultiServerMCPClient:
         """Create MCP client from server configurations with connection pooling and timeout"""
@@ -598,101 +661,8 @@ class MCPAgent:
             "db_session": db
         }
         
-        # Check database cache first unless force refresh
-        if not force_refresh:
-            cache_check_start = time.time()
-            cached_data = await MCPToolCacheManager.get_cached_tools(db, user_id)
-            cache_check_time = (time.time() - cache_check_start) * 1000
-            
-            if cached_data:
-                # Use cached tools - load real tools immediately with cached metadata
-                logger.info(
-                    "Using cached tools metadata, loading real tools",
-                    user_id=user_id,
-                    tool_count=cached_data["tool_count"],
-                    age_seconds=cached_data["age_seconds"],
-                    cache_check_time_ms=int(cache_check_time)
-                )
-                
-                # Store cached metadata for connection setup
-                self._cached_tools_metadata = {
-                    "user_id": user_id,
-                    "tools_data": cached_data.get("tools_data", []),
-                    "loaded_servers": cached_data.get("loaded_servers", [])
-                }
-                
-                # Load real tools immediately from MCP servers
-                real_tools_start = time.time()
-                
-                # Get server configurations
-                configurations = await MCPCredentialManager.get_user_sources_with_credentials(db, user_id)
-                if configurations:
-                    # Build server configs
-                    server_configs = {}
-                    for i, config in enumerate(configurations):
-                        source_name = f"{config['name'].lower().replace(' ', '_')}_{i}"
-                        try:
-                            # Build MCP client configuration for custom SSE servers
-                            server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
-                            if server_type_str == "CUSTOM_SSE":
-                                mcp_config = {
-                                    "command": "mcp-proxy",
-                                    "args": [
-                                        "--headers",
-                                        "x-api-key",
-                                        config["credentials"].get("api_key", ""),
-                                        config["server_url"]
-                                    ],
-                                    "transport": "stdio"
-                                }
-                                server_configs[source_name] = mcp_config
-                                self.loaded_servers.append(f"{config['name']} ({server_type_str})")
-                                
-                                logger.debug(
-                                    "Rebuilt MCP client config for lazy loading",
-                                    source_name=source_name,
-                                    server_type=server_type_str
-                                )
-                            else:
-                                logger.warning(
-                                    "Unsupported server type in lazy loading",
-                                    source_name=source_name,
-                                    server_type=server_type_str
-                                )
-                                continue
-                            
-                        except Exception as e:
-                            logger.error(
-                                "Failed to rebuild config for lazy loading",
-                                source_id=config.get("source_id"),
-                                source_name=config.get("name"),
-                                error=str(e)
-                            )
-                            continue
-                    
-                    if server_configs:
-                        # Create MCP client and load real tools using connection pool
-                        self._server_configs = server_configs
-                        self.mcp_client = await self._create_mcp_client_from_configs(server_configs)
-                        self.tools = await self.mcp_client.get_tools()
-                        
-                        real_tools_time = (time.time() - real_tools_start) * 1000
-                        total_cache_time = (time.time() - load_start) * 1000
-                        
-                        logger.info(
-                            "Successfully loaded real tools using cached metadata",
-                            tool_count=len(self.tools),
-                            real_tools_time_ms=int(real_tools_time),
-                            total_cache_load_time_ms=int(total_cache_time)
-                        )
-                        
-                        return len(self.tools)
-                
-                # Fallback if we can't load real tools
-                logger.warning("Could not load real tools from cached metadata, falling through to full load")
-        
-        # Cache miss or force refresh - load from MCP servers immediately
-        logger.info("Cache miss or force refresh, loading from MCP servers", user_id=user_id)
+        # Simple approach: always load from MCP servers
+        logger.info("Loading tools from user sources", user_id=user_id)
         
         # Get all source configurations for this user
         config_load_start = time.time()
@@ -711,22 +681,12 @@ class MCPAgent:
             source_name = f"{config['name'].lower().replace(' ', '_')}_{i}"
             
             try:
-                # Build MCP client configuration for custom SSE servers
-                server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
-                if server_type_str == "CUSTOM_SSE":
-                    # Custom SSE server (IgniteTech Hive) - use mcp-proxy
-                    mcp_config = {
-                        "command": "mcp-proxy",
-                        "args": [
-                            "--headers",
-                            "x-api-key",
-                            config["credentials"].get("api_key", ""),
-                            config["server_url"]
-                        ],
-                        "transport": "stdio"
-                    }
-                    
+                # Build MCP client configuration using centralized method
+                mcp_config = self._build_mcp_config(config, source_name)
+                
+                if mcp_config:
                     server_configs[source_name] = mcp_config
+                    server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
                     self.loaded_servers.append(f"{config['name']} ({server_type_str})")
                     
                     logger.debug(
@@ -736,11 +696,6 @@ class MCPAgent:
                         transport=mcp_config.get("transport", "unknown")
                     )
                 else:
-                    logger.warning(
-                        "Unsupported server type",
-                        source_name=source_name,
-                        server_type=server_type_str
-                    )
                     continue
                 
             except Exception as e:
@@ -780,20 +735,10 @@ class MCPAgent:
             self.tools = await self.mcp_client.get_tools()
             tools_load_time = (time.time() - tools_load_start) * 1000
             
-            # Cache the results in database
-            cache_save_start = time.time()
-            await MCPToolCacheManager.cache_tools(
-                db=db,
-                user_id=user_id,
-                tools=self.tools,
-                loaded_servers=self.loaded_servers
-            )
-            cache_save_time = (time.time() - cache_save_start) * 1000
-            
             total_load_time = (time.time() - load_start) * 1000
             
             logger.info(
-                "Successfully loaded and cached MCP tools via credential management",
+                "Successfully loaded MCP tools from user sources",
                 tool_count=len(self.tools),
                 tool_names=[tool.name for tool in self.tools],
                 loaded_servers=self.loaded_servers,
@@ -802,8 +747,7 @@ class MCPAgent:
                     "config_load_time_ms": int(config_load_time),
                     "config_build_time_ms": int(config_build_time),
                     "mcp_client_creation_ms": int(mcp_client_time),
-                    "tools_load_time_ms": int(tools_load_time),
-                    "cache_save_time_ms": int(cache_save_time)
+                    "tools_load_time_ms": int(tools_load_time)
                 }
             )
             
@@ -851,22 +795,12 @@ class MCPAgent:
             source_name = f"{config['name'].lower().replace(' ', '_')}_{i}"
             
             try:
-                # Build MCP client configuration for custom SSE servers
-                server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
-                if server_type_str == "CUSTOM_SSE":
-                    # Custom SSE server (IgniteTech Hive) - use mcp-proxy
-                    mcp_config = {
-                        "command": "mcp-proxy",
-                        "args": [
-                            "--headers",
-                            "x-api-key",
-                            config["credentials"].get("api_key", ""),
-                            config["server_url"]
-                        ],
-                        "transport": "stdio"
-                    }
-                    
+                # Build MCP client configuration using centralized method
+                mcp_config = self._build_mcp_config(config, source_name)
+                
+                if mcp_config:
                     server_configs[source_name] = mcp_config
+                    server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
                     self.loaded_servers.append(f"{config['name']} ({server_type_str})")
                     
                     logger.debug(
@@ -876,11 +810,6 @@ class MCPAgent:
                         transport=mcp_config.get("transport", "unknown")
                     )
                 else:
-                    logger.warning(
-                        "Unsupported server type in bot source",
-                        source_name=source_name,
-                        server_type=server_type_str
-                    )
                     continue
                 
             except Exception as e:
@@ -969,22 +898,12 @@ class MCPAgent:
             source_name = f"{config['name'].lower().replace(' ', '_')}_{i}"
             
             try:
-                # Build MCP client configuration for custom SSE servers
-                server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
-                if server_type_str == "CUSTOM_SSE":
-                    # Custom SSE server (IgniteTech Hive) - use mcp-proxy
-                    mcp_config = {
-                        "command": "mcp-proxy",
-                        "args": [
-                            "--headers",
-                            "x-api-key",
-                            config["credentials"].get("api_key", ""),
-                            config["server_url"]
-                        ],
-                        "transport": "stdio"
-                    }
-                    
+                # Build MCP client configuration using centralized method
+                mcp_config = self._build_mcp_config(config, source_name)
+                
+                if mcp_config:
                     server_configs[source_name] = mcp_config
+                    server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
                     self.loaded_servers.append(f"{config['name']} ({server_type_str})")
                     
                     logger.debug(
@@ -994,11 +913,6 @@ class MCPAgent:
                         transport=mcp_config.get("transport", "unknown")
                     )
                 else:
-                    logger.warning(
-                        "Unsupported server type in merged source",
-                        source_name=source_name,
-                        server_type=server_type_str
-                    )
                     continue
                 
             except Exception as e:
@@ -1108,7 +1022,8 @@ class MCPAgent:
         min_sources: int = 2,
         search_depth: str = "thorough",
         conversation_id: Optional[uuid.UUID] = None,
-        db_session: Optional[AsyncSession] = None
+        db_session: Optional[AsyncSession] = None,
+        custom_system_prompt: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Execute query using direct Claude integration with MCP tools
@@ -1210,8 +1125,11 @@ class MCPAgent:
                        tool_types=[type(tool).__name__ for tool in search_tools],
                        tool_names=[tool.name for tool in search_tools])
             
-            # Create search-focused system message based on mode
-            if mode == "search":
+            # Use custom system prompt if provided, otherwise create default based on mode
+            if custom_system_prompt:
+                system_prompt = custom_system_prompt
+                logger.info("Using custom system prompt with bot source instructions")
+            elif mode == "search":
                 system_prompt = f"""You are Scintilla, IgniteTech's comprehensive knowledge search agent. Your primary mission is to provide thorough, well-researched answers by searching deep into our knowledge bases.
 
 CRITICAL SEARCH REQUIREMENTS:
@@ -1359,6 +1277,11 @@ Please provide a thorough response based on searching our knowledge bases with m
             
             # Load conversation history if conversation_id is provided
             if conversation_id and db_session:
+                logger.info(
+                    "Attempting to load conversation history",
+                    conversation_id=conversation_id,
+                    has_db_session=bool(db_session)
+                )
                 try:
                     from src.db.models import Message as DBMessage
                     from sqlalchemy import select
@@ -1373,8 +1296,21 @@ Please provide a thorough response based on searching our knowledge bases with m
                     result = await db_session.execute(query)
                     previous_messages = result.scalars().all()
                     
+                    logger.info(
+                        "Database query completed",
+                        conversation_id=conversation_id,
+                        found_messages=len(previous_messages)
+                    )
+                    
                     # Convert database messages to LangChain format
                     for db_msg in previous_messages:
+                        logger.debug(
+                            "Processing message from database",
+                            message_id=db_msg.message_id,
+                            role=db_msg.role,
+                            content_length=len(db_msg.content) if db_msg.content else 0,
+                            content_preview=db_msg.content[:100] if db_msg.content else ""
+                        )
                         if db_msg.role == "user":
                             messages.append(HumanMessage(content=db_msg.content))
                         elif db_msg.role == "assistant":
@@ -1384,15 +1320,23 @@ Please provide a thorough response based on searching our knowledge bases with m
                         "Loaded conversation history",
                         conversation_id=conversation_id,
                         previous_messages=len(previous_messages),
-                        total_messages=len(messages)
+                        total_messages=len(messages),
+                        messages_summary=[f"{msg.role}: {msg.content[:50]}..." for msg in previous_messages]
                     )
                     
                 except Exception as e:
                     logger.warning(
                         "Failed to load conversation history",
                         conversation_id=conversation_id,
-                        error=str(e)
+                        error=str(e),
+                        error_type=type(e).__name__
                     )
+            else:
+                logger.info(
+                    "No conversation history to load",
+                    conversation_id=conversation_id,
+                    has_db_session=bool(db_session)
+                )
             
             # Add current user message
             messages.append(user_message)
@@ -1899,4 +1843,138 @@ Please provide a thorough response based on searching our knowledge bases with m
             
             enhanced_sources.append(source_copy)
         
-        return enhanced_sources 
+        return enhanced_sources
+
+
+async def create_agent_with_tools(tools: List[BaseTool]) -> 'AgentExecutor':
+    """
+    Create a LangChain AgentExecutor with the provided tools
+    
+    Args:
+        tools: List of LangChain tools
+        
+    Returns:
+        AgentExecutor configured with the tools
+    """
+    from langchain.agents import create_openai_tools_agent, AgentExecutor
+    from langchain.prompts import ChatPromptTemplate
+    
+    # Create a simple prompt template
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful assistant with access to various tools. Use them to answer user questions accurately."),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}"),
+    ])
+    
+    # Create LLM (using Anthropic Claude)
+    llm = ChatAnthropic(
+        model="claude-3-5-sonnet-20241022",
+        temperature=0.1,
+        max_tokens=4000,
+        timeout=60
+    )
+    
+    # Create agent
+    agent = create_openai_tools_agent(llm, tools, prompt)
+    
+    # Create agent executor
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        max_iterations=3,
+        max_execution_time=60,
+        handle_parsing_errors=True
+    )
+    
+    return agent_executor
+
+
+async def load_mcp_tools() -> List[BaseTool]:
+    """
+    Load MCP tools from all available sources (user sources + bot sources)
+    
+    Returns:
+        List of LangChain tools from MCP servers
+    """
+    from src.db.base import AsyncSessionLocal
+    from src.db.models import Source
+    from sqlalchemy import select
+    import uuid
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            # Create MCPAgent and load tools
+            mcp_agent = MCPAgent()
+            total_tools_loaded = 0
+            
+            # First, try to load tools from all bot sources
+            try:
+                # Get all bot-owned sources
+                bot_sources_query = select(Source).where(Source.owner_bot_id.isnot(None))
+                bot_sources_result = await db.execute(bot_sources_query)
+                bot_sources = bot_sources_result.scalars().all()
+                
+                if bot_sources:
+                    bot_source_ids = [source.source_id for source in bot_sources]
+                    logger.info(f"Loading tools from {len(bot_source_ids)} bot sources")
+                    
+                    bot_tool_count = await mcp_agent.load_mcp_endpoints_from_bot_sources(
+                        db, bot_source_ids
+                    )
+                    total_tools_loaded += bot_tool_count
+                    logger.info(f"Loaded {bot_tool_count} tools from bot sources")
+                
+            except Exception as e:
+                logger.warning("Failed to load bot sources", error=str(e))
+            
+            # Second, try to load tools from user sources (all users)
+            try:
+                # Get all user-owned sources  
+                user_sources_query = select(Source).where(Source.owner_user_id.isnot(None))
+                user_sources_result = await db.execute(user_sources_query)
+                user_sources = user_sources_result.scalars().all()
+                
+                if user_sources:
+                    # Group sources by user to load them efficiently
+                    user_source_groups = {}
+                    for source in user_sources:
+                        user_id = source.owner_user_id
+                        if user_id not in user_source_groups:
+                            user_source_groups[user_id] = []
+                        user_source_groups[user_id].append(source)
+                    
+                    logger.info(f"Loading tools from {len(user_sources)} user sources across {len(user_source_groups)} users")
+                    
+                    # Load tools for each user
+                    for user_id, sources in user_source_groups.items():
+                        try:
+                            user_tool_count = await mcp_agent.load_mcp_endpoints_from_user_sources(
+                                db, user_id, force_refresh=True
+                            )
+                            total_tools_loaded += user_tool_count
+                            logger.info(f"Loaded {user_tool_count} tools for user {user_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to load tools for user {user_id}", error=str(e))
+                            
+            except Exception as e:
+                logger.warning("Failed to load user sources", error=str(e))
+            
+            # Log final results
+            if total_tools_loaded > 0:
+                logger.info(
+                    "Global MCP tools loaded successfully",
+                    total_tool_count=total_tools_loaded,
+                    actual_tools=len(mcp_agent.tools),
+                    loaded_servers=mcp_agent.get_loaded_servers()
+                )
+                return mcp_agent.tools
+            else:
+                logger.info("No MCP tools loaded - system will work with empty tool set")
+                # Return empty list but don't treat as error
+                # This allows the system to work even without configured sources
+                return []
+                
+    except Exception as e:
+        logger.error("Failed to load MCP tools", error=str(e))
+        return [] 
