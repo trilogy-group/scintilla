@@ -16,9 +16,7 @@ Scintilla is a modern search-focused platform that:
 
 ### Backend (FastAPI + Python)
 - **FastAPI** application with structured logging
-- **Dual Agent System**: 
-  - `FastMCPAgent`: Performance-optimized with database caching
-  - `MCPAgent`: Full-featured agent with comprehensive tool execution
+- **FastMCPAgent**: High-performance agent with database caching and FastMCP integration
 - **PostgreSQL** database with tool caching and conversation history
 - **AWS KMS** encryption for secure credential storage
 - **Server-level tool caching** for 500x performance improvement
@@ -219,11 +217,9 @@ scintilla/
 │   │   ├── sources.py          # Source management
 │   │   └── models.py           # Pydantic request/response models
 │   ├── agents/                 # AI agent implementations
-│   │   ├── fast_agent.py       # Performance-optimized agent
-│   │   ├── langchain_mcp.py    # Full-featured MCP agent
-│   │   ├── mcp_loader.py       # MCP configuration utilities
-│   │   ├── mcp_client.py       # Direct MCP client implementation
-│   │   └── citations.py        # Source citation management
+│   │   ├── fast_agent.py       # High-performance LangChain agent
+│   │   ├── fast_mcp.py         # FastMCP tool management with caching
+│   │   └── citations.py        # Source citation extraction
 │   ├── db/                     # Database layer
 │   │   ├── models.py           # SQLAlchemy models
 │   │   ├── tool_cache.py       # Tool caching service

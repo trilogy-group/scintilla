@@ -262,4 +262,8 @@ deployment/
 deploy/
 
 # CI/CD
-.github/workflows/secrets/ 
+.github/workflows/secrets/
+
+# Logs
+scintilla.log
+scintilla_test.log 

@@ -40,12 +40,10 @@ async def check_agent_usage():
             # Check for agent imports
             if "fast_agent" in content:
                 print("  ✅ Uses FastMCPAgent")
-            if "langchain_mcp" in content:
-                print("  ⚠️  Uses langchain_mcp (OLD)")
-            if "mcp_client" in content:
-                print("  ⚠️  Uses mcp_client")
-            if "mcp_loader" in content:
-                print("  ⚠️  Uses mcp_loader")
+            if "fast_mcp" in content:
+                print("  ✅ Uses FastMCPToolManager")
+            if "citations" in content:
+                print("  ✅ Uses CitationManager")
 
 
 async def check_tool_schemas():
