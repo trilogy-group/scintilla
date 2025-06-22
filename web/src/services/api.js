@@ -152,7 +152,7 @@ class APIService {
   }
 
   async refreshSourceTools(sourceId) {
-    return this.request(`/api/sources/${sourceId}/refresh-tools`, {
+    return this.request(`/api/sources/${sourceId}/refresh`, {
       method: 'POST'
     })
   }

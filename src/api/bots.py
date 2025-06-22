@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 import structlog
 
 from src.db.base import get_db_session
-from src.db.models import User, Bot, Source, UserBotAccess, MCPServerType
+from src.db.models import User, Bot, Source, UserBotAccess
 from src.db.mcp_credentials import get_bot_sources_with_credentials, store_source_credentials
 from src.auth.mock import get_current_user
 from src.api.models import BotCreate, BotUpdate, BotResponse, BotWithSourcesResponse, BotSourceCreate, BotSourceUpdate, SourceResponse, UserBotAccessResponse
@@ -61,25 +61,15 @@ async def create_bot(
     # Create dedicated sources for this bot
     created_source_ids = []
     for source_data in bot_data.sources:
-        try:
-            # Validate server type
-            server_type = MCPServerType(source_data.server_type)
-        except ValueError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid server type: {source_data.server_type}"
-            )
-        
-        # Create source owned by the bot
+        # Create source owned by the bot (no server_type validation needed)
         source_id = uuid.uuid4()
         source = Source(
             source_id=source_id,
             name=source_data.name,
             description=source_data.description,
             instructions=source_data.instructions,
-            server_type=server_type,
             server_url=source_data.server_url,
+            auth_headers={},  # Will be populated by credentials
             owner_user_id=None,  # Bot-owned, not user-owned
             owner_bot_id=bot_id,
             is_active=True,
@@ -162,7 +152,7 @@ async def list_bots(
     accessible_bot_ids = [row[0] for row in access_result.fetchall()]
     
     # Query for accessible bots
-    conditions = [Bot.is_public == True]
+    conditions = [Bot.is_public.is_(True)]
     if accessible_bot_ids:
         conditions.append(Bot.bot_id.in_(accessible_bot_ids))
     
@@ -228,27 +218,60 @@ async def get_bot(
     sources = []
     source_query = select(Source).where(
         Source.owner_bot_id == bot_id,
-        Source.is_active == True
+        Source.is_active.is_(True)
     )
     source_result = await db.execute(source_query)
     source_objects = source_result.scalars().all()
     
-    sources = [
-        SourceResponse(
-            source_id=source.source_id,
-            name=source.name,
-            description=source.description,
-            instructions=source.instructions,
-            server_type=source.server_type.value,
-            server_url=source.server_url,
-            owner_user_id=source.owner_user_id,
-            owner_bot_id=source.owner_bot_id,
-            is_active=source.is_active,
-            created_at=source.created_at,
-            updated_at=source.updated_at
-        )
-        for source in source_objects
-    ]
+    # Build sources with tool cache information
+    sources = []
+    for source in source_objects:
+        # Extract ALL source attributes early to avoid greenlet issues
+        source_id = source.source_id
+        source_name = source.name
+        source_description = source.description
+        source_instructions = source.instructions
+        source_server_url = source.server_url
+        source_owner_user_id = source.owner_user_id
+        source_owner_bot_id = source.owner_bot_id
+        source_is_active = source.is_active
+        source_created_at = source.created_at
+        source_updated_at = source.updated_at
+        source_tools_cache_status = source.tools_cache_status
+        source_tools_last_cached_at = source.tools_last_cached_at
+        source_tools_cache_error = source.tools_cache_error
+        
+        # Get cached tools for this source
+        cached_tools = []
+        cached_tool_count = 0
+        
+        try:
+            from src.db.tool_cache import ToolCacheService
+            tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
+            if tools_data:
+                cached_tools = [tool["name"] for tool in tools_data]
+                cached_tool_count = len(cached_tools)
+        except Exception as e:
+            logger.warning("Failed to get cached tools for bot source", 
+                          source_id=source_id, error=str(e))
+        
+        sources.append(SourceResponse(
+            source_id=source_id,
+            name=source_name,
+            description=source_description,
+            instructions=source_instructions,
+            server_url=source_server_url,
+            owner_user_id=source_owner_user_id,
+            owner_bot_id=source_owner_bot_id,
+            is_active=source_is_active,
+            created_at=source_created_at,
+            updated_at=source_updated_at,
+            tools_cache_status=source_tools_cache_status,
+            tools_last_cached_at=source_tools_last_cached_at,
+            tools_cache_error=source_tools_cache_error,
+            cached_tool_count=cached_tool_count,
+            cached_tools=cached_tools
+        ))
     
     # TODO: Get tool count from MCP client
     tool_count = len(sources) * 8 if sources else 0  # Estimate
@@ -346,7 +369,7 @@ async def update_bot(
         # Get current bot sources
         current_sources_query = select(Source).where(
             Source.owner_bot_id == bot_id,
-            Source.is_active == True
+            Source.is_active.is_(True)
         )
         current_sources_result = await db.execute(current_sources_query)
         current_sources_list = current_sources_result.scalars().all()
@@ -398,22 +421,14 @@ async def update_bot(
                     updated_source_ids.append(source_id_value)  # Use extracted value
             else:
                 # Create new source
-                try:
-                    server_type = MCPServerType(source_update.server_type)
-                except ValueError:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Invalid server type: {source_update.server_type}"
-                    )
-                
                 source_id = uuid.uuid4()
                 new_source = Source(
                     source_id=source_id,
                     name=source_update.name,
                     description=source_update.description,
                     instructions=source_update.instructions,
-                    server_type=server_type,
                     server_url=source_update.server_url,
+                    auth_headers={},
                     owner_user_id=None,
                     owner_bot_id=bot_id,
                     is_active=True,

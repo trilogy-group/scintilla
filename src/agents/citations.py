@@ -56,6 +56,26 @@ class SimpleSourceExtractor:
         """
         sources = []
         
+        # Skip processing failed tool calls (short error messages)
+        content_str = str(result_data)
+        if len(content_str.strip()) < 50 or "Error calling tool" in content_str:
+            logger.warning(f"⏭️ SKIPPING FAILED TOOL CALL: {tool_name} (length: {len(content_str)})")
+            return []  # Return empty list for failed calls
+        
+        # Special handling for Jira search results to extract individual ticket URLs
+        tool_lower = tool_name.lower()
+        logger.warning(f"🚨 CITATION EXTRACTION DEBUG: tool={tool_name}, data_type={type(result_data)}, data_length={len(str(result_data))}")
+        logger.warning(f"🚨 CITATION DATA SAMPLE: {str(result_data)[:200]}...")
+        
+        if ('jira' in tool_lower and 'search' in tool_lower) or tool_lower in ['search_jira_issues_using_jql', 'jira_search']:
+            logger.warning(f"🚨 JIRA SEARCH DETECTED: {tool_name}")
+            jira_sources = SimpleSourceExtractor._extract_jira_search_sources(result_data)
+            if jira_sources:
+                logger.warning(f"🚨 JIRA SUCCESS: {len(jira_sources)} sources extracted")
+                return jira_sources
+            else:
+                logger.warning(f"❌ NO JIRA SOURCES EXTRACTED from tool: {tool_name}")
+        
         # Convert result to string for analysis
         content = str(result_data)
         
@@ -95,6 +115,179 @@ class SimpleSourceExtractor:
             ))
         
         return sources
+    
+    @staticmethod
+    def _extract_jira_search_sources(result_data: Any) -> List[Source]:
+        """Extract individual Jira tickets from jira_search results (supports both JSON and text formats)"""
+        sources = []
+        
+        try:
+            logger.info(f"Processing Jira search data type: {type(result_data)}")
+            logger.info(f"Raw result_data content (first 500 chars): {str(result_data)[:500]}")
+            
+            data = None
+            
+            # Try to parse as JSON first
+            if isinstance(result_data, str):
+                if not result_data.strip():
+                    logger.warning("Empty result_data string")
+                    return []
+                
+                # Try JSON parsing
+                try:
+                    import json
+                    data = json.loads(result_data)
+                    logger.info("Successfully parsed as JSON")
+                except json.JSONDecodeError:
+                    logger.info("Not JSON format, trying text extraction")
+                    # Fall back to text extraction
+                    return SimpleSourceExtractor._extract_jira_from_text(result_data)
+            else:
+                # Assume it's already a dict
+                data = result_data
+                logger.info(f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
+            
+            # Handle JSON format
+            if isinstance(data, dict):
+                return SimpleSourceExtractor._extract_jira_from_json(data)
+            else:
+                # Convert to string and try text extraction
+                return SimpleSourceExtractor._extract_jira_from_text(str(result_data))
+                
+        except Exception as e:
+            logger.warning(f"Failed to parse Jira search results: {e}")
+            logger.exception("Full exception:")
+            # Last resort: try text extraction
+            try:
+                return SimpleSourceExtractor._extract_jira_from_text(str(result_data))
+            except:
+                return []
+        
+    @staticmethod
+    def _extract_jira_from_json(data: dict) -> List[Source]:
+        """Extract Jira sources from JSON format"""
+        sources = []
+        
+        # Extract the base Jira URL from the first issue's API URL or self
+        base_url = None
+        issues = data.get('issues', [])
+        
+        # Try to get base URL from self or first issue
+        if data.get('self'):
+            import re
+            match = re.match(r'(https?://[^/]+)', data.get('self'))
+            if match:
+                base_url = match.group(1)
+        
+        if not base_url and issues and len(issues) > 0:
+            first_issue = issues[0]
+            api_url = first_issue.get('self', '') or first_issue.get('url', '')
+            if api_url:
+                import re
+                match = re.match(r'(https?://[^/]+)', api_url)
+                if match:
+                    base_url = match.group(1)
+        
+        logger.info(f"Found {len(issues)} issues in JSON, base_url: {base_url}")
+        
+        # Keep it simple: just take first few issues (no complex scoring)
+        for i, issue in enumerate(issues[:5]):  # Simple limit
+            issue_key = issue.get('key', '')
+            
+            # Get fields from issue (might be nested in 'fields')
+            fields = issue.get('fields', {})
+            summary = fields.get('summary') or issue.get('summary', 'Untitled Issue')
+            
+            # Get status (might be nested)
+            status_obj = fields.get('status') or issue.get('status', {})
+            status = status_obj.get('name', 'Unknown') if isinstance(status_obj, dict) else str(status_obj)
+            
+            created = fields.get('created') or issue.get('created', '')
+            
+            # Only create URL if we have the key and base URL
+            browse_url = f"{base_url}/browse/{issue_key}" if base_url and issue_key else None
+            
+            # Simple title format
+            title = f"{issue_key}: {summary}" if issue_key else summary
+            
+            # Simple snippet
+            snippet = f"Status: {status}"
+            if created:
+                snippet += f" | Created: {created[:10]}"
+            
+            logger.info(f"Issue {i+1}: {issue_key} - {title[:50]}... -> {browse_url}")
+            
+            sources.append(Source(
+                title=title,
+                url=browse_url,
+                source_type="jira",
+                snippet=snippet,
+                metadata={'tool': 'jira_search', 'issue_key': issue_key}
+            ))
+        
+        logger.info(f"Returning {len(sources)} JSON sources")
+        return sources
+        
+    @staticmethod
+    def _extract_jira_from_text(text_data: str) -> List[Source]:
+        """Extract Jira sources from formatted text output"""
+        sources = []
+        
+        try:
+            import re
+            
+            # Look for patterns like "ABC-123: Title" or "ABC-123 - Title"
+            # Also extract URLs if present
+            ticket_pattern = r'([A-Z]+-\d+)[:>\-\s]+([^\n\r]+?)(?:\n|$)'
+            url_pattern = r'https://[^\s]+\.atlassian\.net'
+            
+            # Find base URL for ticket links
+            base_url = None
+            url_match = re.search(url_pattern, text_data)
+            if url_match:
+                full_url = url_match.group(0)
+                # Extract base URL (everything before /browse/ or /rest/)
+                match = re.match(r'(https://[^/]+)', full_url)
+                if match:
+                    base_url = match.group(1)
+            
+            logger.info(f"Text extraction: base_url = {base_url}")
+            
+            # Find all ticket references
+            ticket_matches = re.findall(ticket_pattern, text_data, re.MULTILINE | re.IGNORECASE)
+            
+            logger.info(f"Found {len(ticket_matches)} ticket patterns in text")
+            
+            for i, (ticket_id, title) in enumerate(ticket_matches[:10]):  # Limit to 10
+                # Clean up title
+                title = title.strip()
+                if len(title) > 100:
+                    title = title[:97] + "..."
+                
+                # Create browse URL if we have base URL
+                browse_url = f"{base_url}/browse/{ticket_id}" if base_url else None
+                
+                # Try to extract status and other info from surrounding text
+                snippet = f"Ticket: {ticket_id}"
+                
+                logger.info(f"Text ticket {i+1}: {ticket_id} - {title[:30]}... -> {browse_url}")
+                
+                sources.append(Source(
+                    title=f"{ticket_id}: {title}",
+                    url=browse_url,
+                    source_type="jira",
+                    snippet=snippet,
+                    metadata={'tool': 'jira_search', 'issue_key': ticket_id}
+                ))
+            
+            logger.info(f"Returning {len(sources)} text-extracted sources")
+            return sources
+            
+        except Exception as e:
+            logger.warning(f"Text extraction failed: {e}")
+            return []
+    
+
     
     @staticmethod
     def _extract_url_from_content(content: str, tool_name: str, tool_params: Dict[str, Any] = None) -> str:

@@ -1,5 +1,20 @@
-import { useState, useEffect } from 'react'
-import { Plus, Settings, Trash2, TestTube, CheckCircle, AlertCircle, Loader, RefreshCw, ChevronDown, ChevronRight, Wrench, Clock, AlertTriangle } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { 
+  Plus, 
+  Trash2, 
+  Loader, 
+  AlertCircle, 
+  X, 
+  RefreshCw, 
+  TestTube,
+  CheckCircle,
+  Clock,
+  AlertTriangle,
+  Wrench,
+  ChevronDown,
+  ChevronRight
+} from 'lucide-react'
+import { useScintilla } from '../hooks/useScintilla'
 import api from '../services/api'
 
 export const SourcesManager = () => {
@@ -9,84 +24,41 @@ export const SourcesManager = () => {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [testingSource, setTestingSource] = useState(null)
   const [refreshingCache, setRefreshingCache] = useState(false)
-  const [expandedTools, setExpandedTools] = useState({}) // Track which source tools are expanded
-  const [refreshingSource, setRefreshingSource] = useState(null) // Track which source is being refreshed
+  const [refreshingSource, setRefreshingSource] = useState(null)
+  const [expandedTools, setExpandedTools] = useState({})
 
-  // Form state
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     instructions: '',
-    server_type: 'CUSTOM_SSE',
     server_url: '',
-    credentials: {
-      full_sse_url: ''
-    }
+    auth_method: 'headers', // 'headers' or 'url_embedded'
+    auth_headers: '',
+    credentials: {}
   })
 
-  // Server type configurations
-  const SERVER_CONFIGS = {
-    CUSTOM_SSE: {
-      label: 'MCP Hive',
-      description: 'IgniteTech Hive servers with embedded API key',
-      credentials: ['full_sse_url'],
-      placeholders: {
-        full_sse_url: 'https://mcp-server.ti.trilogy.com/91db0691/sse?x-api-key=sk-hive-...'
-      }
+  // Authentication method configurations
+  const AUTH_METHODS = {
+    headers: {
+      label: 'Header-based Authentication',
+      description: 'Use custom headers (Authorization, X-API-Key, etc.)',
+      placeholder: '{"Authorization": "Bearer your-token", "X-API-Key": "your-key"}'
     },
-    DIRECT_SSE: {
-      label: 'External API', 
-      description: 'External MCP servers with custom headers',
-      credentials: ['custom_headers'],
-      placeholders: {
-        custom_headers: '{"Authorization": "Bearer token", "X-API-Key": "key", "X-Custom": "value"}'
-      }
-    },
-    WEBSOCKET: {
-      label: 'WebSocket (Coming Soon)',
-      description: 'WebSocket-based MCP connections (not yet implemented)',
-      credentials: ['custom_headers'],
-      placeholders: {
-        custom_headers: '{"Authorization": "Bearer token"}'
-      }
+    url_embedded: {
+      label: 'URL-embedded Authentication',
+      description: 'API key/credentials embedded in the URL',
+      placeholder: 'https://server.com/sse?x-api-key=your-key&other=params'
     }
   }
 
-  // Handle server type change - reset credentials
-  const handleServerTypeChange = (newServerType) => {
-    const config = SERVER_CONFIGS[newServerType]
-    const newCredentials = {}
-    
-    // Initialize with empty values for the new server type
-    config.credentials.forEach(field => {
-      newCredentials[field] = ''
-    })
-
+  // Handle auth method change
+  const handleAuthMethodChange = (newMethod) => {
     setFormData({
       ...formData,
-      server_type: newServerType,
-      server_url: '', // Reset URL too since CUSTOM_SSE doesn't use this field
-      credentials: newCredentials
+      auth_method: newMethod,
+      auth_headers: '',
+      server_url: ''
     })
-  }
-
-  // Parse Hive full SSE URL to extract server URL and API key
-  const parseHiveUrl = (fullUrl) => {
-    try {
-      const url = new URL(fullUrl)
-      const apiKey = url.searchParams.get('x-api-key')
-      if (!apiKey) {
-        throw new Error('No x-api-key parameter found in URL')
-      }
-      
-      // Remove the API key parameter to get the base server URL
-      url.searchParams.delete('x-api-key')
-      const serverUrl = url.toString()
-      
-      return { serverUrl, apiKey }
-    } catch (error) {
-      throw new Error('Invalid Hive SSE URL format')
-    }
   }
 
   useEffect(() => {
@@ -111,7 +83,7 @@ export const SourcesManager = () => {
       setRefreshingCache(true)
       const result = await api.refreshCache()
       if (result.success) {
-        alert(`Tool cache refreshed! ${result.entries_removed} cache entries cleared.`)
+        alert(`Tool cache refreshed! Refreshed ${result.refreshed_sources}/${result.total_sources} sources with ${result.total_tools} total tools.`)
       } else {
         alert('Failed to refresh cache: ' + result.message)
       }
@@ -127,11 +99,10 @@ export const SourcesManager = () => {
       name: '',
       description: '',
       instructions: '',
-      server_type: 'CUSTOM_SSE',
       server_url: '',
-      credentials: {
-        full_sse_url: ''
-      }
+      auth_method: 'headers',
+      auth_headers: '',
+      credentials: {}
     })
   }
 
@@ -142,16 +113,23 @@ export const SourcesManager = () => {
         name: formData.name,
         description: formData.description,
         instructions: formData.instructions,
-        server_type: formData.server_type,
         server_url: formData.server_url,
-        credentials: formData.credentials
+        credentials: {}
       }
 
-      // Special handling for CUSTOM_SSE (MCP Hive) - parse full URL
-      if (formData.server_type === 'CUSTOM_SSE' && formData.credentials.full_sse_url) {
-        const { serverUrl, apiKey } = parseHiveUrl(formData.credentials.full_sse_url)
-        sourceData.server_url = serverUrl
-        sourceData.credentials = { api_key: apiKey }
+      // Handle authentication based on method
+      if (formData.auth_method === 'headers') {
+        // Parse JSON headers
+        try {
+          const headers = JSON.parse(formData.auth_headers || '{}')
+          sourceData.credentials = { auth_headers: headers }
+        } catch (err) {
+          setError('Invalid JSON format in auth headers')
+          return
+        }
+      } else {
+        // URL-embedded: use the URL as-is, empty credentials
+        sourceData.credentials = {}
       }
 
       await api.createSource(sourceData)
@@ -178,10 +156,11 @@ export const SourcesManager = () => {
     try {
       setTestingSource(sourceId)
       const result = await api.testSourceConnection(sourceId)
-      if (result.success) {
-        alert(`Connection test successful! Found ${result.tool_count} tools.`)
+      const testResult = result.connection_test
+      if (testResult.success) {
+        alert(`Connection test successful! Found ${testResult.tool_count} tools in ${testResult.response_time_ms}ms.`)
       } else {
-        alert('Connection test failed: ' + result.message)
+        alert('Connection test failed: ' + testResult.message)
       }
     } catch (err) {
       alert('Connection test failed: ' + err.message)
@@ -231,16 +210,22 @@ export const SourcesManager = () => {
     try {
       setRefreshingSource(sourceId)
       const result = await api.refreshSourceTools(sourceId)
-      if (result.success) {
-        alert(`Tools refreshed! Found ${result.cached_tools} tools.`)
-        await loadSources() // Reload to get updated tool information
-      } else {
-        alert('Failed to refresh tools: ' + result.message)
-      }
+      alert(`Tools refreshed! Found ${result.tools_count} tools.`)
+      await loadSources()
     } catch (err) {
       alert('Failed to refresh tools: ' + err.message)
     } finally {
       setRefreshingSource(null)
+    }
+  }
+
+  const getAuthDisplay = (source) => {
+    // Try to determine auth method from URL and show appropriately
+    const url = source.server_url
+    if (url && (url.includes('x-api-key=') || url.includes('api_key=') || url.includes('token='))) {
+      return 'URL-embedded'
+    } else {
+      return 'Header-based'
     }
   }
 
@@ -313,45 +298,68 @@ export const SourcesManager = () => {
                   value={formData.name}
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-                  placeholder="e.g., My Hive Server"
+                  placeholder="e.g., My MCP Server"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Server Type *
+                  Authentication Method *
                 </label>
                 <select
                   required
-                  value={formData.server_type}
-                  onChange={(e) => handleServerTypeChange(e.target.value)}
+                  value={formData.auth_method}
+                  onChange={(e) => handleAuthMethodChange(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
                 >
-                  {Object.entries(SERVER_CONFIGS).map(([type, config]) => (
-                    <option key={type} value={type} disabled={type === 'WEBSOCKET'}>
+                  {Object.entries(AUTH_METHODS).map(([method, config]) => (
+                    <option key={method} value={method}>
                       {config.label}
                     </option>
                   ))}
                 </select>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  {SERVER_CONFIGS[formData.server_type].description}
+                  {AUTH_METHODS[formData.auth_method].description}
                 </p>
               </div>
             </div>
 
-            {/* Only show Server URL field for non-CUSTOM_SSE types */}
-            {formData.server_type !== 'CUSTOM_SSE' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Server URL *
+              </label>
+              <input
+                type="url"
+                required
+                value={formData.server_url}
+                onChange={(e) => setFormData({...formData, server_url: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                placeholder={AUTH_METHODS[formData.auth_method].placeholder}
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {formData.auth_method === 'url_embedded' 
+                  ? 'Include authentication parameters directly in the URL'
+                  : 'Base URL without authentication parameters'
+                }
+              </p>
+            </div>
+
+            {/* Header-based authentication field */}
+            {formData.auth_method === 'headers' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Server URL *
+                  Authentication Headers *
                 </label>
-                <input
-                  type="url"
+                <textarea
                   required
-                  value={formData.server_url}
-                  onChange={(e) => setFormData({...formData, server_url: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-                  placeholder="https://mcp-server.example.com/sse"
+                  value={formData.auth_headers}
+                  onChange={(e) => setFormData({...formData, auth_headers: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white font-mono text-sm"
+                  rows={3}
+                  placeholder={AUTH_METHODS.headers.placeholder}
                 />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  JSON object with authentication headers
+                </p>
               </div>
             )}
             
@@ -379,52 +387,6 @@ export const SourcesManager = () => {
                 rows={2}
                 placeholder="Optional instructions for this source"
               />
-            </div>
-
-            {/* Dynamic Credential Fields */}
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Authentication
-              </h4>
-
-              {SERVER_CONFIGS[formData.server_type].credentials.map((credentialType) => {
-                const isRequired = formData.server_type === 'CUSTOM_SSE' || 
-                  (formData.server_type === 'DIRECT_SSE' && credentialType === 'custom_headers')
-                
-                return (
-                  <div key={credentialType}>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {credentialType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())} 
-                      {isRequired ? ' *' : ' (optional)'}
-                    </label>
-                    {credentialType === 'custom_headers' ? (
-                      <textarea
-                        required={isRequired}
-                        value={formData.credentials[credentialType] || ''}
-                        onChange={(e) => setFormData({
-                          ...formData, 
-                          credentials: {...formData.credentials, [credentialType]: e.target.value}
-                        })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white font-mono text-sm"
-                        rows={3}
-                        placeholder={SERVER_CONFIGS[formData.server_type].placeholders[credentialType]}
-                      />
-                    ) : (
-                      <input
-                        type={credentialType.includes('token') || credentialType.includes('key') || credentialType.includes('url') ? 'password' : 'text'}
-                        required={isRequired}
-                        value={formData.credentials[credentialType] || ''}
-                        onChange={(e) => setFormData({
-                          ...formData, 
-                          credentials: {...formData.credentials, [credentialType]: e.target.value}
-                        })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-                        placeholder={SERVER_CONFIGS[formData.server_type].placeholders[credentialType]}
-                      />
-                    )}
-                  </div>
-                )
-              })}
             </div>
 
             <div className="flex items-center space-x-3 pt-4">
@@ -462,7 +424,7 @@ export const SourcesManager = () => {
                   {source.name}
                 </h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  {source.server_type}
+                  {getAuthDisplay(source)}
                 </p>
               </div>
               <div className="flex items-center space-x-2">
@@ -503,7 +465,7 @@ export const SourcesManager = () => {
             <div className="space-y-2 text-sm">
               <div>
                 <span className="text-gray-500 dark:text-gray-400">URL:</span>
-                <span className="ml-2 text-gray-900 dark:text-white font-mono text-xs">
+                <span className="ml-2 text-gray-900 dark:text-white font-mono text-xs break-all">
                   {source.server_url}
                 </span>
               </div>
@@ -523,110 +485,74 @@ export const SourcesManager = () => {
                   </span>
                 </div>
               )}
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">Created:</span>
-                <span className="ml-2 text-gray-700 dark:text-gray-300">
-                  {new Date(source.created_at).toLocaleDateString()}
-                </span>
-              </div>
             </div>
 
-            {/* Tool Information Section */}
+            {/* Tool Cache Status */}
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <span className={`flex items-center space-x-1 text-sm ${getToolStatusColor(source.tools_cache_status)}`}>
+                  <span className={`${getToolStatusColor(source.tools_cache_status)}`}>
                     {getToolStatusIcon(source.tools_cache_status)}
-                    <span className="capitalize">
-                      {source.tools_cache_status || 'Unknown'} Tools
-                    </span>
                   </span>
-                  {source.cached_tool_count > 0 && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      ({source.cached_tool_count} tools)
-                    </span>
-                  )}
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    {source.cached_tool_count || 0} tools
+                  </span>
                 </div>
-                
-                {/* Tools toggle button */}
+
                 {source.cached_tools && source.cached_tools.length > 0 && (
                   <button
                     onClick={() => toggleToolsExpansion(source.source_id)}
-                    className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                    className="text-gray-400 hover:text-gray-600"
                   >
                     {expandedTools[source.source_id] ? (
-                      <ChevronDown className="h-3 w-3" />
+                      <ChevronDown className="h-4 w-4" />
                     ) : (
-                      <ChevronRight className="h-3 w-3" />
+                      <ChevronRight className="h-4 w-4" />
                     )}
-                    <span>Tools</span>
                   </button>
                 )}
               </div>
 
-              {/* Tool cache timestamp */}
-              {source.tools_last_cached_at && (
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                  Last cached: {new Date(source.tools_last_cached_at).toLocaleString()}
+              {/* Expanded Tools List */}
+              {expandedTools[source.source_id] && source.cached_tools && (
+                <div className="mt-2 space-y-1">
+                  {source.cached_tools.slice(0, 10).map((tool, index) => (
+                    <div key={index} className="text-xs text-gray-600 dark:text-gray-400 pl-6">
+                      • {tool}
+                    </div>
+                  ))}
+                  {source.cached_tools.length > 10 && (
+                    <div className="text-xs text-gray-500 dark:text-gray-500 pl-6">
+                      ... and {source.cached_tools.length - 10} more
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Tool cache error */}
               {source.tools_cache_error && (
-                <div className="text-xs text-red-600 dark:text-red-400 mb-2 p-2 bg-red-50 dark:bg-red-900/20 rounded">
+                <div className="mt-2 text-xs text-red-600 dark:text-red-400">
                   Error: {source.tools_cache_error}
                 </div>
               )}
-
-              {/* Expanded tools list */}
-              {expandedTools[source.source_id] && source.cached_tools && source.cached_tools.length > 0 && (
-                <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded text-xs">
-                  <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">Available Tools:</div>
-                  <div className="grid grid-cols-1 gap-1">
-                    {source.cached_tools.map((toolName, index) => (
-                      <div key={index} className="font-mono text-gray-600 dark:text-gray-400">
-                        • {toolName}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* No tools message */}
-              {source.tools_cache_status === 'cached' && (!source.cached_tools || source.cached_tools.length === 0) && (
-                <div className="text-xs text-yellow-600 dark:text-yellow-400">
-                  No tools available from this source
-                </div>
-              )}
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="flex items-center space-x-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span className="text-sm text-green-600 dark:text-green-400">
-                  Active
-                </span>
-              </div>
             </div>
           </div>
         ))}
       </div>
 
-      {sources.length === 0 && !showCreateForm && (
+      {sources.length === 0 && (
         <div className="text-center py-12">
-          <Settings className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-500 dark:text-gray-400 text-lg">
-            No personal sources configured yet
-          </p>
-          <p className="text-gray-400 dark:text-gray-500 text-sm mt-2">
-            Personal sources are your individual MCP connections.<br/>
-            For bot sources, check the <strong>Bots</strong> tab.
+          <Wrench className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+            No sources found
+          </h3>
+          <p className="text-gray-500 dark:text-gray-400 mb-4">
+            Add your first MCP source to get started
           </p>
           <button
             onClick={() => setShowCreateForm(true)}
-            className="mt-4 px-4 py-2 bg-scintilla-500 text-white rounded-lg hover:bg-scintilla-600 transition-colors"
+            className="px-4 py-2 bg-scintilla-500 text-white rounded-lg hover:bg-scintilla-600 transition-colors"
           >
-            Add Your First Source
+            Add Source
           </button>
         </div>
       )}

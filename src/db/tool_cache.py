@@ -13,12 +13,10 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
-from langchain_core.tools import BaseTool
 import structlog
 
 from src.db.models import Source, SourceTool
-from src.agents.langchain_mcp import MCPAgent
-from src.db.mcp_credentials import MCPCredentialManager
+from src.agents.fast_mcp import FastMCPService
 
 logger = structlog.get_logger()
 
@@ -68,7 +66,7 @@ class ToolCacheService:
                 # Return existing cached tools count
                 tools_query = select(SourceTool).where(
                     SourceTool.source_id == source_id,
-                    SourceTool.is_active == True
+                    SourceTool.is_active.is_(True)
                 )
                 tools_result = await db.execute(tools_query)
                 existing_tools = tools_result.scalars().all()
@@ -89,84 +87,63 @@ class ToolCacheService:
             source.tools_cache_error = None
             await db.commit()
             
-            # Create a temporary MCPAgent to load tools from this specific source
-            mcp_agent = MCPAgent()
-            
-            # Get source configuration with credentials
-            source_configs = await MCPCredentialManager.get_bot_sources_with_credentials(db, [source_id])
-            
-            if not source_configs:
-                raise Exception(f"No credentials found for source {source_id}")
-            
-            source_config = source_configs[0]
-            
-            # Build MCP config for this source
-            mcp_config = mcp_agent._build_mcp_config(source_config, "temp_source")
-            
-            if not mcp_config:
-                raise Exception(f"Failed to build MCP config for source {source_id}")
-            
-            # Create MCP client for this single source
-            server_configs = {"temp_source": mcp_config}
-            client = await mcp_agent._create_mcp_client_from_configs(server_configs)
-            
-            # Get tools from MCP server
+            # Use FastMCP service for tool discovery (simplified - no separate API key needed)
             mcp_load_start = time.time()
+            
             try:
-                # Add timeout to prevent hanging on get_tools call
-                tools = await asyncio.wait_for(
-                    client.get_tools(),
-                    timeout=30  # 30 second timeout for get_tools
+                # Use FastMCP service to discover and cache tools
+                success, message, tool_count = await asyncio.wait_for(
+                    FastMCPService.discover_and_cache_tools(
+                        db=db,
+                        source_id=source_id
+                    ),
+                    timeout=30  # 30 second timeout for tool discovery
                 )
+                
+                if not success:
+                    raise Exception(f"Failed to discover tools: {message}")
+                
+                # FastMCP service already cached the tools, so we just need to get them
+                tools_query = select(SourceTool).where(
+                    SourceTool.source_id == source_id,
+                    SourceTool.is_active.is_(True)
+                )
+                tools_result = await db.execute(tools_query)
+                cached_tools = tools_result.scalars().all()
+                
+                available_tools = [
+                    {
+                        "name": tool.tool_name,
+                        "description": tool.tool_description,
+                        "inputSchema": tool.tool_schema
+                    }
+                    for tool in cached_tools
+                ]
+                
             except asyncio.TimeoutError:
-                raise Exception(f"MCP server get_tools() timed out after 30 seconds for source {source_id}")
+                raise Exception(f"FastMCP tool discovery timed out after 30 seconds for source {source_id}")
+            except Exception as e:
+                raise Exception(f"Failed to discover tools via FastMCP: {str(e)}")
             
             mcp_load_time = (time.time() - mcp_load_start) * 1000
             
-            logger.info("Loaded tools from MCP server", 
-                       source_id=source_id, tool_count=len(tools), 
+            logger.info("Retrieved tools using FastMCP service", 
+                       source_id=source_id, 
+                       tool_count=len(available_tools),
+                       method="fastmcp_simplified",
                        load_time_ms=int(mcp_load_time))
             
-            # Clear existing cached tools for this source
-            delete_query = delete(SourceTool).where(SourceTool.source_id == source_id)
-            await db.execute(delete_query)
-            
-            # Cache tools in database
+            # FastMCP service already handled caching and updating source status
+            # Just format the tools for response
             db_insert_start = time.time()
-            cached_tools = []
-            
-            for tool in tools:
-                # Extract tool schema if available
-                tool_schema = None
-                if hasattr(tool, 'args_schema') and tool.args_schema:
-                    try:
-                        tool_schema = tool.args_schema.model_json_schema()
-                    except Exception as e:
-                        logger.debug("Failed to extract tool schema", 
-                                   tool_name=tool.name, error=str(e))
-                
-                source_tool = SourceTool(
-                    source_id=source_id,
-                    tool_name=tool.name,
-                    tool_description=tool.description,
-                    tool_schema=tool_schema,
-                    last_refreshed_at=datetime.now(timezone.utc),
-                    is_active=True
-                )
-                
-                db.add(source_tool)
-                cached_tools.append({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "has_schema": tool_schema is not None
-                })
-            
-            # Update source cache status
-            source.tools_cache_status = "cached"
-            source.tools_last_cached_at = datetime.now(timezone.utc)
-            source.tools_cache_error = None
-            
-            await db.commit()
+            cached_tools = [
+                {
+                    "name": tool["name"],
+                    "description": tool["description"], 
+                    "schema": tool["inputSchema"]
+                }
+                for tool in available_tools
+            ]
             
             db_insert_time = (time.time() - db_insert_start) * 1000
             total_cache_time = (time.time() - cache_start) * 1000
@@ -238,8 +215,8 @@ class ToolCacheService:
             Source, SourceTool.source_id == Source.source_id
         ).where(
             SourceTool.source_id.in_(source_ids),
-            SourceTool.is_active == True,
-            Source.is_active == True
+            SourceTool.is_active.is_(True),
+            Source.is_active.is_(True)
         )
         
         result = await db.execute(tools_query)
@@ -309,7 +286,7 @@ class ToolCacheService:
         logger.info("Starting refresh of all source tools")
         
         # Get all active sources
-        sources_query = select(Source).where(Source.is_active == True)
+        sources_query = select(Source).where(Source.is_active.is_(True))
         result = await db.execute(sources_query)
         sources = result.scalars().all()
         

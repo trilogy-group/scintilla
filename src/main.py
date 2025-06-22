@@ -72,7 +72,7 @@ app.add_middleware(
 app.include_router(query.router, prefix="/api", tags=["query"])
 app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 app.include_router(bots.router, prefix="/api", tags=["bots"])
-app.include_router(sources.router, prefix="/api", tags=["sources"])
+app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(mcp_management.router, prefix="/api", tags=["mcp"])
 
 

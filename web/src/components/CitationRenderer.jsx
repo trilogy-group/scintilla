@@ -176,6 +176,19 @@ const SourceTypeIcon = ({ type }) => {
           🐙
         </span>
       )
+    case 'jira':
+    case 'jira_issue':
+      return (
+        <span className={`${iconClass} text-blue-600`} title="Jira Issue">
+          🎫
+        </span>
+      )
+    case 'confluence':
+      return (
+        <span className={`${iconClass} text-blue-500`} title="Confluence">
+          📚
+        </span>
+      )
     case 'search':
       return (
         <span className={`${iconClass} text-blue-600`} title="Search Result">
@@ -183,9 +196,16 @@ const SourceTypeIcon = ({ type }) => {
         </span>
       )
     case 'web':
+    case 'web_api':
       return (
         <span className={`${iconClass} text-purple-600`} title="Web">
           🌐
+        </span>
+      )
+    case 'mcp_tool':
+      return (
+        <span className={`${iconClass} text-orange-600`} title="MCP Tool">
+          🔧
         </span>
       )
     default:

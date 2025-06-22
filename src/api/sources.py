@@ -5,22 +5,24 @@ Handles CRUD operations for sources (individual MCP server connections owned by 
 """
 
 import uuid
+from uuid import UUID
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete, or_, func
 from sqlalchemy.orm import selectinload
 import structlog
 
 from src.db.base import get_db_session
-from src.db.models import User, Source, MCPServerType, CredentialType
-from src.db.mcp_credentials import get_user_sources_with_credentials, store_source_credentials
+from src.db.models import User, Source, SourceTool, Bot, UserBotAccess
 from src.auth.mock import get_current_user
+from src.api.models import SourceCreate, SourceResponse, RefreshResponse, ErrorResponse
+from src.db.mcp_credentials import store_source_credentials, get_user_sources_with_credentials, MCPCredentialManager
 from src.db.tool_cache import ToolCacheService
-from src.api.models import SourceCreate, SourceResponse
+from src.agents.fast_mcp import FastMCPService
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -42,116 +44,94 @@ class SourceWithStatusResponse(SourceResponse):
     tool_count: Optional[int]
 
 
-@router.post("/sources", response_model=SourceResponse)
+@router.post("", response_model=SourceResponse)
 async def create_source(
     source_data: SourceCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Create a new source for the current user"""
+    """Create a new MCP source for the user"""
     
-    # Validate server type
     try:
-        server_type = MCPServerType(source_data.server_type)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid server type: {source_data.server_type}"
+        # Create source with simplified structure (no server_type validation needed)
+        source_id = uuid.uuid4()
+        now = datetime.now(timezone.utc)
+        
+        source = Source(
+            source_id=source_id,
+            name=source_data.name,
+            description=source_data.description,
+            instructions=source_data.instructions,
+            server_url=source_data.server_url,
+            auth_headers={},  # Will be populated by credentials
+            owner_user_id=user.user_id,
+            is_active=True,
+            created_at=now,
+            updated_at=now
         )
-    
-    # Create source with pre-generated ID
-    source_id = uuid.uuid4()
-    created_at = datetime.utcnow()
-    
-    source = Source(
-        source_id=source_id,
-        name=source_data.name,
-        description=source_data.description,
-        instructions=source_data.instructions,
-        server_type=server_type,
-        server_url=source_data.server_url,
-        owner_user_id=user.user_id,
-        owner_bot_id=None,  # User-owned source
-        is_active=True,
-        created_at=created_at,
-        updated_at=created_at
-    )
-    
-    db.add(source)
-    await db.flush()  # Get the ID without committing
-    
-    # Store credentials
-    try:
-        await store_source_credentials(
+        
+        db.add(source)
+        await db.flush()  # Get the source ID without committing
+        
+        # Store credentials using simplified system
+        from src.db.mcp_credentials import SimplifiedCredentialManager
+        
+        auth_headers = source_data.credentials.get("auth_headers", {})
+        success = await SimplifiedCredentialManager.store_source_auth(
             db=db,
             source_id=source_id,
-            credentials=source_data.credentials
+            server_url=source_data.server_url,
+            auth_headers=auth_headers
         )
+        
+        if not success:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to store source credentials"
+            )
+        
         await db.commit()
+        
+        # Get cached tools for response
+        cached_tools = []
+        cached_tool_count = 0
+        
+        logger.info(
+            "Source created",
+            source_id=source_id,
+            name=source_data.name,
+            user_id=user.user_id
+        )
+        
+        return SourceResponse(
+            source_id=source_id,
+            name=source_data.name,
+            description=source_data.description,
+            instructions=source_data.instructions,
+            server_url=source_data.server_url,
+            owner_user_id=user.user_id,
+            owner_bot_id=None,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+            tools_cache_status="pending",
+            tools_last_cached_at=None,
+            tools_cache_error=None,
+            cached_tool_count=cached_tool_count,
+            cached_tools=cached_tools
+        )
         
     except Exception as e:
         await db.rollback()
-        logger.error("Failed to store source credentials", error=str(e))
+        logger.error("Failed to create source", error=str(e), user_id=user.user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to store source credentials"
+            detail=f"Failed to create source: {str(e)}"
         )
-    
-    logger.info(
-        "Source created",
-        source_id=source_id,
-        name=source_data.name,
-        owner_user_id=user.user_id
-    )
-    
-    # Asynchronously cache tools for this source (don't block the response)
-    async def _cache_tools_background():
-        """Background task to cache tools without blocking the API response"""
-        try:
-            # Use a new database session for background task
-            from src.db.base import get_db_session
-            async for background_db in get_db_session():
-                cache_result = await ToolCacheService.cache_tools_for_source(background_db, source_id)
-                if cache_result["success"]:
-                    logger.info("Tools cached for new source", 
-                               source_id=source_id, 
-                               tool_count=cache_result["cached_tools"],
-                               cache_time_ms=cache_result["cache_time_ms"])
-                else:
-                    logger.warning("Failed to cache tools for new source",
-                                  source_id=source_id,
-                                  error=cache_result["error"])
-                break
-        except Exception as e:
-            logger.warning("Tool caching failed for new source",
-                          source_id=source_id,
-                          error=str(e))
-    
-    # Start background task without waiting for it
-    import asyncio
-    asyncio.create_task(_cache_tools_background())
-    
-    return SourceResponse(
-        source_id=source_id,
-        name=source_data.name,
-        description=source_data.description,
-        instructions=source_data.instructions,
-        server_type=server_type.value,
-        server_url=source_data.server_url,
-        owner_user_id=user.user_id,
-        owner_bot_id=None,
-        is_active=True,
-        created_at=created_at,
-        updated_at=created_at,
-        tools_cache_status="pending",  # Initial status
-        tools_last_cached_at=None,
-        tools_cache_error=None,
-        cached_tool_count=0,
-        cached_tools=[]
-    )
 
 
-@router.get("/sources", response_model=List[SourceResponse])
+@router.get("", response_model=List[SourceResponse])
 async def list_user_sources(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
@@ -160,7 +140,7 @@ async def list_user_sources(
     
     query = select(Source).where(
         Source.owner_user_id == user.user_id,
-        Source.is_active == True
+        Source.is_active.is_(True)
     )
     
     result = await db.execute(query)
@@ -174,7 +154,6 @@ async def list_user_sources(
         source_name = source.name
         source_description = source.description
         source_instructions = source.instructions
-        source_server_type = source.server_type
         source_server_url = source.server_url
         source_owner_user_id = source.owner_user_id
         source_owner_bot_id = source.owner_bot_id
@@ -190,7 +169,6 @@ async def list_user_sources(
         cached_tool_count = 0
         
         try:
-            from src.db.tool_cache import ToolCacheService
             tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
             if tools_data:
                 cached_tools = [tool["name"] for tool in tools_data]
@@ -204,7 +182,6 @@ async def list_user_sources(
             name=source_name,
             description=source_description,
             instructions=source_instructions,
-            server_type=source_server_type.value,
             server_url=source_server_url,
             owner_user_id=source_owner_user_id,
             owner_bot_id=source_owner_bot_id,
@@ -221,7 +198,7 @@ async def list_user_sources(
     return source_responses
 
 
-@router.get("/sources/{source_id}", response_model=SourceResponse)
+@router.get("/{source_id}", response_model=SourceResponse)
 async def get_source(
     source_id: uuid.UUID,
     user: User = Depends(get_current_user),
@@ -248,7 +225,6 @@ async def get_source(
     source_name = source.name
     source_description = source.description
     source_instructions = source.instructions
-    source_server_type = source.server_type
     source_server_url = source.server_url
     source_owner_user_id = source.owner_user_id
     source_owner_bot_id = source.owner_bot_id
@@ -264,7 +240,6 @@ async def get_source(
     cached_tool_count = 0
     
     try:
-        from src.db.tool_cache import ToolCacheService
         tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_source_id])
         if tools_data:
             cached_tools = [tool["name"] for tool in tools_data]
@@ -278,7 +253,6 @@ async def get_source(
         name=source_name,
         description=source_description,
         instructions=source_instructions,
-        server_type=source_server_type.value,
         server_url=source_server_url,
         owner_user_id=source_owner_user_id,
         owner_bot_id=source_owner_bot_id,
@@ -293,7 +267,7 @@ async def get_source(
     )
 
 
-@router.put("/sources/{source_id}", response_model=SourceResponse)
+@router.put("/{source_id}", response_model=SourceResponse)
 async def update_source(
     source_id: uuid.UUID,
     source_data: SourceUpdate,
@@ -320,7 +294,6 @@ async def update_source(
     original_name = source.name
     original_description = source.description
     original_instructions = source.instructions
-    original_server_type = source.server_type
     original_server_url = source.server_url
     original_owner_user_id = source.owner_user_id
     original_owner_bot_id = source.owner_bot_id
@@ -345,12 +318,12 @@ async def update_source(
     credentials_updated = False
     if source_data.credentials is not None:
         try:
-            await store_source_credentials(
+            success = await store_source_credentials(
                 db=db,
                 source_id=source_id,
                 credentials=source_data.credentials
             )
-            credentials_updated = True
+            credentials_updated = success
         except Exception as e:
             logger.error("Failed to update source credentials", error=str(e))
             raise HTTPException(
@@ -358,35 +331,15 @@ async def update_source(
                 detail="Failed to update source credentials"
             )
     
-    await db.commit()
-    
-    # If credentials were updated, refresh the tool cache
+    # If credentials were updated, mark tools for lazy refresh
     if credentials_updated:
-        async def _refresh_tools_background():
-            """Background task to refresh tools without blocking the API response"""
-            try:
-                # Use a new database session for background task
-                from src.db.base import get_db_session
-                async for background_db in get_db_session():
-                    cache_result = await ToolCacheService.cache_tools_for_source(background_db, source_id, force_refresh=True)
-                    if cache_result["success"]:
-                        logger.info("Tools refreshed for updated source", 
-                                   source_id=source_id, 
-                                   tool_count=cache_result["cached_tools"],
-                                   cache_time_ms=cache_result["cache_time_ms"])
-                    else:
-                        logger.warning("Failed to refresh tools for updated source",
-                                      source_id=source_id,
-                                      error=cache_result["error"])
-                    break
-            except Exception as e:
-                logger.warning("Tool refresh failed for updated source",
-                              source_id=source_id,
-                              error=str(e))
-        
-        # Start background task without waiting for it
-        import asyncio
-        asyncio.create_task(_refresh_tools_background())
+        logger.info("Source credentials updated - tools will be refreshed on next use", 
+                   source_id=source_id)
+        # Update source to mark tools as pending refresh
+        source.tools_cache_status = "pending"
+        source.tools_cache_error = None
+    
+    await db.commit()
     
     # Use captured or updated values
     final_name = source_data.name if source_data.name is not None else original_name
@@ -398,7 +351,6 @@ async def update_source(
     cached_tool_count = 0
     
     try:
-        from src.db.tool_cache import ToolCacheService
         tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
         if tools_data:
             cached_tools = [tool["name"] for tool in tools_data]
@@ -419,22 +371,21 @@ async def update_source(
         name=final_name,
         description=final_description,
         instructions=final_instructions,
-        server_type=original_server_type.value,
         server_url=original_server_url,
         owner_user_id=original_owner_user_id,
         owner_bot_id=original_owner_bot_id,
         is_active=original_is_active,
         created_at=original_created_at,
         updated_at=updated_at,
-        tools_cache_status="caching" if credentials_updated else original_tools_cache_status,
-        tools_last_cached_at=original_tools_last_cached_at,
-        tools_cache_error=None if credentials_updated else original_tools_cache_error,
+        tools_cache_status=source_tools_cache_status,
+        tools_last_cached_at=source_tools_last_cached_at,
+        tools_cache_error=source_tools_cache_error,
         cached_tool_count=cached_tool_count,
         cached_tools=cached_tools
     )
 
 
-@router.delete("/sources/{source_id}")
+@router.delete("/{source_id}")
 async def delete_source(
     source_id: uuid.UUID,
     user: User = Depends(get_current_user),
@@ -476,7 +427,7 @@ async def delete_source(
     return {"message": "Source deleted successfully"}
 
 
-@router.get("/sources/{source_id}/status", response_model=SourceWithStatusResponse)
+@router.get("/{source_id}/status", response_model=SourceWithStatusResponse)
 async def get_source_status(
     source_id: uuid.UUID,
     user: User = Depends(get_current_user),
@@ -504,7 +455,6 @@ async def get_source_status(
         name=source_config['name'],
         description=None,  # Not included in config
         instructions=None,  # Not included in config
-        server_type=source_config['server_type'].value if hasattr(source_config['server_type'], 'value') else str(source_config['server_type']),
         server_url=source_config['server_url'],
         owner_user_id=user.user_id,
         owner_bot_id=None,  # Not available in config
@@ -518,104 +468,71 @@ async def get_source_status(
     )
 
 
-@router.post("/sources/{source_id}/test")
+@router.post("/{source_id}/test")
 async def test_source_connection(
-    source_id: uuid.UUID,
-    user: User = Depends(get_current_user),
+    source_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Test connection to a source"""
+    """Test connection to an MCP server using FastMCP."""
     
-    # Get source with credentials
-    sources_with_creds = await get_user_sources_with_credentials(db, user.user_id)
-    source_config = next(
-        (s for s in sources_with_creds if s['source_id'] == source_id),
-        None
+    # Get source and extract attributes early
+    source = await db.get(Source, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    
+    # Extract attributes immediately
+    source_owner_user_id = source.owner_user_id
+    source_owner_bot_id = source.owner_bot_id
+    source_url = source.server_url
+    source_name = source.name
+    
+    # Check ownership - handle both user-owned and bot-owned sources
+    user_can_test = False
+    
+    if source_owner_user_id:
+        # User-owned source: check direct ownership
+        user_can_test = (source_owner_user_id == current_user.user_id)
+    elif source_owner_bot_id:
+        # Bot-owned source: check if user has access to the bot
+        # Get the bot and check access
+        bot_query = select(Bot).where(Bot.bot_id == source_owner_bot_id)
+        bot_result = await db.execute(bot_query)
+        bot = bot_result.scalar_one_or_none()
+        
+        if bot:
+            # Check if bot is public or user has explicit access
+            if bot.is_public:
+                user_can_test = True
+            else:
+                # Check explicit access
+                access_query = select(UserBotAccess).where(
+                    UserBotAccess.user_id == current_user.user_id,
+                    UserBotAccess.bot_id == source_owner_bot_id
+                )
+                access_result = await db.execute(access_query)
+                user_can_test = access_result.scalar_one_or_none() is not None
+    
+    if not user_can_test:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Test connection using FastMCP service with simplified interface
+    # Get auth configuration from database
+    from src.db.mcp_credentials import SimplifiedCredentialManager
+    auth_config = await SimplifiedCredentialManager.get_source_auth(db, source_id)
+    if not auth_config:
+        raise HTTPException(status_code=400, detail="Source authentication not configured")
+    
+    result = await FastMCPService.test_connection(
+        auth_config["server_url"], 
+        auth_config["auth_headers"]
     )
     
-    if not source_config:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Source not found"
-        )
-    
-    # Actually test the connection using MCP agent
-    try:
-        from src.agents.langchain_mcp import MCPAgent
-        
-        agent = MCPAgent()
-        # Create a temporary configuration list with just this source
-        temp_configs = [source_config]
-        
-        # Build server configs for testing
-        server_configs = {}
-        config = source_config
-        source_name = f"{config['name'].lower().replace(' ', '_')}_test"
-        
-        server_type_str = config["server_type"].value if hasattr(config["server_type"], 'value') else str(config["server_type"])
-        if server_type_str == "CUSTOM_SSE":
-            mcp_config = {
-                "command": "uvx",
-                "args": [
-                    "mcp-proxy",
-                    "--headers",
-                    "x-api-key",
-                    config["credentials"].get("api_key", ""),
-                    config["server_url"]
-                ],
-                "transport": "stdio"
-            }
-            server_configs[source_name] = mcp_config
-        
-        if server_configs:
-            from langchain_mcp_adapters.client import MultiServerMCPClient
-            import time
-            import asyncio
-            
-            start_time = time.time()
-            test_client = MultiServerMCPClient(server_configs)
-            
-            # Add timeout to prevent hanging on get_tools call
-            try:
-                tools = await asyncio.wait_for(
-                    test_client.get_tools(),
-                    timeout=30  # 30 second timeout for connection test
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "success": False,
-                    "message": "Connection test timed out after 30 seconds",
-                    "tool_count": 0,
-                    "response_time_ms": 30000
-                }
-            
-            end_time = time.time()
-            
-            response_time = int((end_time - start_time) * 1000)
-            
-            return {
-                "success": True,
-                "message": "Connection test successful",
-                "tool_count": len(tools),
-                "response_time_ms": response_time,
-                "tools": [tool.name for tool in tools] if tools else []
-            }
-        else:
-            return {
-                "success": False,
-                "message": f"Unsupported server type: {server_type_str}",
-                "tool_count": 0,
-                "response_time_ms": 0
-            }
-            
-    except Exception as e:
-        logger.error("Connection test failed", source_id=source_id, error=str(e))
-        return {
-            "success": False,
-            "message": f"Connection test failed: {str(e)}",
-            "tool_count": 0,
-            "response_time_ms": 0
-        }
+    return {
+        "source_id": source_id,
+        "source_name": source_name,
+        "connection_test": result
+    }
 
 
 @router.post("/refresh-cache")
@@ -624,18 +541,50 @@ async def refresh_tool_cache(
     db: AsyncSession = Depends(get_db_session)
 ):
     """
-    Refresh cached tools for all user sources
+    Refresh cached tools for all sources the user has access to (user-owned + accessible bot sources) using FastMCP
     """
     try:
-        # Get user's sources
-        query = select(Source).where(
-            Source.owner_user_id == user.user_id,
-            Source.is_active == True
-        )
-        result = await db.execute(query)
-        user_sources = result.scalars().all()
+        from sqlalchemy import or_
         
-        if not user_sources:
+        # Get user's directly owned sources
+        user_sources_query = select(Source).where(
+            Source.owner_user_id == user.user_id,
+            Source.is_active.is_(True)
+        )
+        user_sources_result = await db.execute(user_sources_query)
+        user_sources = user_sources_result.scalars().all()
+        
+        # Get bot sources user has access to
+        # First get user's accessible bot IDs
+        access_query = select(UserBotAccess.bot_id).where(
+            UserBotAccess.user_id == user.user_id
+        )
+        access_result = await db.execute(access_query)
+        accessible_bot_ids = [row[0] for row in access_result.fetchall()]
+        
+        # Get public bots + explicitly accessible bots
+        bot_conditions = [Bot.is_public.is_(True)]
+        if accessible_bot_ids:
+            bot_conditions.append(Bot.bot_id.in_(accessible_bot_ids))
+        
+        accessible_bots_query = select(Bot.bot_id).where(or_(*bot_conditions))
+        accessible_bots_result = await db.execute(accessible_bots_query)
+        all_accessible_bot_ids = [row[0] for row in accessible_bots_result.fetchall()]
+        
+        # Get sources owned by accessible bots
+        bot_sources = []
+        if all_accessible_bot_ids:
+            bot_sources_query = select(Source).where(
+                Source.owner_bot_id.in_(all_accessible_bot_ids),
+                Source.is_active.is_(True)
+            )
+            bot_sources_result = await db.execute(bot_sources_query)
+            bot_sources = bot_sources_result.scalars().all()
+        
+        # Combine all sources
+        all_sources = list(user_sources) + list(bot_sources)
+        
+        if not all_sources:
             return {
                 "success": True,
                 "message": "No sources found for user",
@@ -647,38 +596,47 @@ async def refresh_tool_cache(
         total_tools = 0
         errors = []
         
-        for source in user_sources:
+        for source in all_sources:
+            # Extract source attributes early
+            source_id = source.source_id
+            source_name = source.name
+            source_url = source.server_url
+            
             try:
-                cache_result = await ToolCacheService.cache_tools_for_source(
-                    db, source.source_id, force_refresh=True
+                # Use FastMCP service to discover and cache tools (simplified interface)
+                success, message, tool_count = await FastMCPService.discover_and_cache_tools(
+                    db=db,
+                    source_id=source_id
                 )
                 
-                if cache_result["success"]:
+                if success:
                     refreshed_count += 1
-                    total_tools += cache_result["cached_tools"]
+                    total_tools += tool_count
                     logger.info("Refreshed tools for source",
-                               source_id=source.source_id,
-                               source_name=source.name,
-                               tool_count=cache_result["cached_tools"])
+                               source_id=source_id,
+                               source_name=source_name,
+                               tool_count=tool_count)
                 else:
                     errors.append({
-                        "source_id": str(source.source_id),
-                        "source_name": source.name,
-                        "error": cache_result["error"]
+                        "source_id": str(source_id),
+                        "source_name": source_name,
+                        "error": message
                     })
                     
             except Exception as e:
                 errors.append({
-                    "source_id": str(source.source_id),
-                    "source_name": source.name,
+                    "source_id": str(source_id),
+                    "source_name": source_name,
                     "error": str(e)
                 })
         
         return {
             "success": True,
-            "message": f"Refreshed tools for {refreshed_count}/{len(user_sources)} sources",
+            "message": f"Refreshed tools for {refreshed_count}/{len(all_sources)} sources (user-owned: {len(user_sources)}, bot sources: {len(bot_sources)})",
             "refreshed_sources": refreshed_count,
-            "total_sources": len(user_sources),
+            "total_sources": len(all_sources),
+            "user_sources": len(user_sources),
+            "bot_sources": len(bot_sources),
             "total_tools": total_tools,
             "errors": errors if errors else None
         }
@@ -693,93 +651,89 @@ async def refresh_tool_cache(
         }
 
 
-@router.post("/sources/{source_id}/refresh-tools")
+@router.post("/{source_id}/refresh")
 async def refresh_source_tools(
     source_id: uuid.UUID,
-    user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """
-    Refresh cached tools for a specific source (user-owned or bot-owned if user has access)
-    """
-    # Get the source
-    query = select(Source).where(Source.source_id == source_id)
-    result = await db.execute(query)
-    source = result.scalar_one_or_none()
+    """Refresh tools from an MCP server using FastMCP and update the database cache."""
     
+    # Get source and extract all needed attributes early
+    source = await db.get(Source, source_id)
     if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Source not found"
-        )
+        raise HTTPException(status_code=404, detail="Source not found")
     
-    # Extract ALL source attributes early to avoid greenlet issues
+    # Extract source attributes immediately to avoid greenlet errors
+    source_id_value = source.source_id
     source_name = source.name
+    source_url = source.server_url
     source_owner_user_id = source.owner_user_id
     source_owner_bot_id = source.owner_bot_id
     
-    # Check access permissions
-    has_access = False
+    # Check ownership - handle both user-owned and bot-owned sources
+    user_can_refresh = False
     
-    if source_owner_user_id == user.user_id:
-        # User owns the source directly
-        has_access = True
+    if source_owner_user_id:
+        # User-owned source: check direct ownership
+        user_can_refresh = (source_owner_user_id == current_user.user_id)
     elif source_owner_bot_id:
-        # Check if user has access to the bot that owns this source
-        from src.db.models import Bot, UserBotAccess
+        # Bot-owned source: check if user has access to the bot
         from sqlalchemy import or_
         
+        # Get the bot and check access
         bot_query = select(Bot).where(Bot.bot_id == source_owner_bot_id)
         bot_result = await db.execute(bot_query)
         bot = bot_result.scalar_one_or_none()
         
         if bot:
-            # Extract bot attributes early too
-            bot_is_public = bot.is_public
-            bot_bot_id = bot.bot_id
-            
-            if bot_is_public:
-                has_access = True
+            # Check if bot is public or user has explicit access
+            if bot.is_public:
+                user_can_refresh = True
             else:
                 # Check explicit access
                 access_query = select(UserBotAccess).where(
-                    UserBotAccess.user_id == user.user_id,
-                    UserBotAccess.bot_id == bot_bot_id
+                    UserBotAccess.user_id == current_user.user_id,
+                    UserBotAccess.bot_id == source_owner_bot_id
                 )
                 access_result = await db.execute(access_query)
-                has_access = access_result.scalar_one_or_none() is not None
+                user_can_refresh = access_result.scalar_one_or_none() is not None
     
-    if not has_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to refresh tools for this source"
-        )
+    if not user_can_refresh:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     try:
-        cache_result = await ToolCacheService.cache_tools_for_source(
-            db, source_id, force_refresh=True
+        logger.info(f"Refreshing tools using FastMCP for source: {source_name}")
+        
+        # Use FastMCP service to discover and cache tools (simplified interface)
+        success, message, tool_count = await FastMCPService.discover_and_cache_tools(
+            db=db,
+            source_id=source_id_value
         )
         
-        if cache_result["success"]:
-            return {
-                "success": True,
-                "message": f"Tools refreshed for source '{source_name}'",  # Use extracted value
-                "cached_tools": cache_result["cached_tools"],
-                "cache_time_ms": cache_result["cache_time_ms"],
-                "status": cache_result["status"]
-            }
-        else:
-            return {
-                "success": False,
-                "message": f"Failed to refresh tools: {cache_result['error']}",
-                "cached_tools": 0
-            }
-            
+        if not success:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Tool refresh failed: {message}"
+            )
+        
+        logger.info(f"Successfully refreshed and cached {tool_count} tools for source: {source_name}")
+        
+        return RefreshResponse(
+            message=f"Successfully refreshed {tool_count} tools using FastMCP",
+            tools_count=tool_count,
+            timestamp=datetime.utcnow()
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
-        logger.error("Failed to refresh source tools", 
-                    source_id=source_id, error=str(e))
-        return {
-            "success": False,
-            "message": f"Failed to refresh tools: {str(e)}",
-            "cached_tools": 0
-        } 
+        logger.error(f"Failed to refresh tools for source {source_name}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to refresh tools: {str(e)}"
+        )
+
+
+# Removed duplicate test endpoint - using the FastMCP-based one above 

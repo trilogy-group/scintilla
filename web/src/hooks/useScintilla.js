@@ -293,6 +293,10 @@ export const useScintilla = () => {
             console.log(`  DB save time: ${chunk.timing.db_save_time_ms}ms`)
           }
           
+          // Clear saving flag when stream completes - conversation is saved in background
+          console.log('🔓 Stream completed, clearing conversation saving flag')
+          setIsSavingConversation(false)
+          
           // Handle conversation creation/update from legacy complete chunk (fallback)
           if (chunk.conversation_id && chunk.conversation_id !== currentConversationId) {
             const newConversationId = chunk.conversation_id

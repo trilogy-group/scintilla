@@ -212,7 +212,7 @@ class ProductionModeHandler:
         if active_bot_ids:
             bot_sources_query = select(Source.source_id).where(
                 Source.owner_bot_id.in_(active_bot_ids),
-                Source.is_active == True
+                Source.is_active.is_(True)
             )
             result = await self.db.execute(bot_sources_query)
             bot_source_ids = [row[0] for row in result.fetchall()]
@@ -288,6 +288,8 @@ class ProductionModeHandler:
                 db_session=self.db
             ):
                 yield chunk
+            
+            logger.info("Production query handler completed successfully")
                 
         except Exception as e:
             logger.error("Fast agent query failed", error=str(e))

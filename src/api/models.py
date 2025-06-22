@@ -59,9 +59,8 @@ class StreamChunk(BaseModel):
 class BotSourceCreate(BaseModel):
     """Request to create a new source for a bot"""
     name: str = Field(..., description="Display name for the source")
-    server_type: Literal["CUSTOM_SSE", "DIRECT_SSE", "WEBSOCKET"] = Field(..., description="Type of MCP server")
     server_url: str = Field(..., description="Base URL of the MCP server")
-    credentials: Dict[str, str] = Field(..., description="Credential fields")
+    credentials: Dict[str, Any] = Field(..., description="Credential fields - can contain auth_headers object or other auth data")
     description: Optional[str] = None
     instructions: Optional[str] = None  # Instructions for how this source should be used
 
@@ -79,9 +78,8 @@ class BotSourceUpdate(BaseModel):
     """Request to update or add a source to a bot"""
     source_id: Optional[UUID] = None  # If provided, update existing source
     name: str = Field(..., description="Display name for the source")
-    server_type: Literal["CUSTOM_SSE", "DIRECT_SSE", "WEBSOCKET"] = Field(..., description="Type of MCP server")
     server_url: str = Field(..., description="Base URL of the MCP server")
-    credentials: Optional[Dict[str, str]] = None  # Optional for existing sources
+    credentials: Optional[Dict[str, Any]] = None  # Optional for existing sources - can contain auth_headers object
     description: Optional[str] = None
     instructions: Optional[str] = None
 
@@ -119,9 +117,8 @@ class ErrorResponse(BaseModel):
 class SourceCreate(BaseModel):
     """Request to create a new source"""
     name: str = Field(..., description="Display name for the source")
-    server_type: Literal["CUSTOM_SSE", "DIRECT_SSE", "WEBSOCKET"] = Field(..., description="Type of MCP server")
     server_url: str = Field(..., description="Base URL of the MCP server")
-    credentials: Dict[str, str] = Field(..., description="Credential fields")
+    credentials: Dict[str, Any] = Field(..., description="Credential fields - can contain auth_headers object or other auth data")
     description: Optional[str] = None
     instructions: Optional[str] = None  # Instructions for bot usage
 
@@ -132,7 +129,6 @@ class SourceResponse(BaseModel):
     name: str
     description: Optional[str]
     instructions: Optional[str]
-    server_type: str
     server_url: str
     owner_user_id: Optional[UUID]
     owner_bot_id: Optional[UUID]
@@ -204,4 +200,11 @@ class HealthResponse(BaseModel):
     """Health check response"""
     status: str = "healthy"
     timestamp: datetime
-    version: Optional[str] = None 
+    version: Optional[str] = None
+
+
+class RefreshResponse(BaseModel):
+    """Response for tool refresh operations"""
+    message: str = Field(..., description="Status message")
+    tools_count: int = Field(..., description="Number of tools refreshed")
+    timestamp: datetime = Field(..., description="Timestamp of refresh operation") 

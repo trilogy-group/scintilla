@@ -45,6 +45,7 @@ async def query_endpoint(
     """
     async def stream_response():
         try:
+            logger.info("Starting stream response")
             # Initialize handlers
             query_handler = QueryHandler(db, user.user_id)
             conversation_manager = ConversationManager(db)
@@ -56,21 +57,29 @@ async def query_endpoint(
                 user_message=request.message
             )
             
+            logger.info("Conversation ready, starting query processing")
+            
             # Capture final chunk for saving
             final_chunk = None
             
             # Handle the query based on mode
             if TEST_MODE:
+                logger.info("Processing test mode query")
                 async for chunk in query_handler.handle_test_query(request, conversation.conversation_id):
                     if chunk.get("type") == "final_response":
                         final_chunk = chunk
+                        logger.info("Captured final response chunk")
                     yield await format_sse_chunk(chunk)
             else:
+                logger.info("Processing production mode query")
                 async for chunk in query_handler.handle_production_query(request, conversation.conversation_id):
                     if chunk.get("type") == "final_response":
                         final_chunk = chunk
+                        logger.info("Captured final response chunk")
                     yield await format_sse_chunk(chunk)
-                    
+            
+            logger.info("Query processing completed, setting up background task")
+            
             # Save conversation in background with captured final chunk
             background_tasks.add_task(
                 conversation_manager.save_conversation_background,
@@ -78,6 +87,21 @@ async def query_endpoint(
                 conversation_id=conversation.conversation_id,
                 final_chunk=final_chunk
             )
+            
+            logger.info("Background task queued, sending completion signals")
+            
+            # Send completion chunk before [DONE]
+            completion_chunk = {
+                "type": "complete",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            yield await format_sse_chunk(completion_chunk)
+            
+            # Send completion signal to frontend
+            logger.info("Sending completion signal to frontend")
+            yield "data: [DONE]\n\n"
+            
+            logger.info("Stream response completed successfully")
             
         except Exception as e:
             logger.error("Query endpoint failed", error=str(e), user_id=user.user_id)
@@ -87,6 +111,14 @@ async def query_endpoint(
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             yield await format_sse_chunk(error_chunk)
+            # Send completion chunk before [DONE] even on error
+            completion_chunk = {
+                "type": "complete",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            yield await format_sse_chunk(completion_chunk)
+            # Send completion signal even on error
+            yield "data: [DONE]\n\n"
     
     return StreamingResponse(
         stream_response(),
