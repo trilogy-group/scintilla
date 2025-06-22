@@ -45,10 +45,13 @@ class FastMCPAgent:
     """
     
     def __init__(self):
+        """Initialize FastMCPAgent"""
         self.tool_manager = FastMCPToolManager()
-        self.citation_manager = CitationManager()
         self.tools: List[BaseTool] = []
         self.loaded_sources: List[str] = []
+        self.source_instructions: Dict[str, str] = {}  # Map source name to instructions
+        self.citation_manager = CitationManager()
+        logger.info("FastMCPAgent initialized")
     
     async def load_tools_from_cache(
         self, 
@@ -69,6 +72,9 @@ class FastMCPAgent:
         # Store references for compatibility
         self.tools = self.tool_manager.get_tools()
         self.loaded_sources = self.tool_manager.get_server_names()
+        
+        # Get source instructions from the tool manager
+        self.source_instructions = await self.tool_manager.get_source_instructions(db)
         
         logger.info("FastMCP tools loaded", tool_count=tool_count, sources=len(self.loaded_sources))
         return tool_count
@@ -134,6 +140,14 @@ class FastMCPAgent:
         tools_context = "\n".join(tools_info)
         server_context = ", ".join(self.loaded_sources)
         
+        # Build source-specific instructions section
+        instructions_section = ""
+        if self.source_instructions:
+            instructions_section = "\n\nSOURCE-SPECIFIC INSTRUCTIONS:\n"
+            for source_name, instructions in self.source_instructions.items():
+                if instructions:  # Only include if instructions exist
+                    instructions_section += f"\n**{source_name}:**\n{instructions}\n"
+        
         return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
 DECISION MATRIX - When to use tools vs respond directly:
@@ -164,7 +178,7 @@ CITATION REQUIREMENTS (only when using tools):
 CAPABILITY RESPONSE (when asked what you can do):
 "I have access to {len(search_tools)} search tools from {len(self.loaded_sources)} knowledge sources. I can help you find information about technical documentation, code repositories, project details, and more. Just ask me specific questions about topics you're interested in!"
 
-Be intelligent about tool usage - search when information is needed, respond directly when appropriate."""
+Be intelligent about tool usage - search when information is needed, respond directly when appropriate.{instructions_section}"""
     
     async def _execute_tool_calls(
         self, 

@@ -441,6 +441,7 @@ class FastMCPToolManager:
     def __init__(self):
         self.server_configs: List[MCPServerConfig] = []
         self.tools: List[BaseTool] = []
+        self.sources: List[Source] = []
         
     async def load_tools_for_user(
         self,
@@ -489,6 +490,9 @@ class FastMCPToolManager:
         if not all_sources:
             logger.warning("No cached sources found for tool loading")
             return 0
+        
+        # Store sources for instruction retrieval
+        self.sources = all_sources
         
         # Build server configs 
         self.server_configs = []
@@ -675,4 +679,21 @@ class FastMCPToolManager:
             if is_search and not is_destructive:
                 search_tools.append(tool)
         
-        return search_tools 
+        return search_tools
+    
+    async def get_source_instructions(self, db: AsyncSession) -> Dict[str, str]:
+        """Get instructions for all loaded sources"""
+        instructions_map = {}
+        
+        if hasattr(self, 'sources'):
+            for source in self.sources:
+                # Extract attributes early to avoid greenlet issues
+                source_name = source.name
+                source_instructions = source.instructions
+                
+                if source_instructions:
+                    instructions_map[source_name] = source_instructions
+                    logger.info(f"📋 Found instructions for source: {source_name}")
+        
+        logger.info(f"📋 Loaded instructions for {len(instructions_map)} sources")
+        return instructions_map 
