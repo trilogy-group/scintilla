@@ -141,7 +141,10 @@ export const useBotAutoComplete = () => {
 
   // Handle keyboard navigation in suggestions
   const handleKeyDown = useCallback((e) => {
-    if (!showBotSuggestions || botSuggestions.length === 0) return
+    if (!showBotSuggestions || botSuggestions.length === 0) {
+      // Return null to let parent handle Enter key for form submission
+      return null
+    }
 
     switch (e.key) {
       case 'ArrowDown':

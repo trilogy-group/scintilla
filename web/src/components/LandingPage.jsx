@@ -43,6 +43,10 @@ const LandingPage = ({ onSearch, onNavigate }) => {
     const result = handleKeyDown(e)
     if (result?.selectBot) {
       selectBotSuggestion(result.selectBot, query, setQuery)
+    } else if (e.key === 'Enter' && !showBotSuggestions) {
+      // If Enter is pressed and no bot suggestions are showing, submit the form
+      e.preventDefault()
+      handleSubmit(e)
     }
   }
 

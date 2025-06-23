@@ -1,0 +1,142 @@
+# Scintilla Terraform Variables - Example Configuration
+# Copy this file to terraform.tfvars and fill in your actual values
+# DO NOT commit terraform.tfvars to version control!
+
+# Environment Configuration
+environment = "development"
+aws_region  = "us-east-1"
+
+# Infrastructure Configuration
+existing_vpc_id = "vpc-0ecd69c2cad874a73"
+
+# Database Configuration
+db_password = "your_secure_database_password_here"
+postgres_version = "15.8"
+
+# GitHub Repository Configuration
+github_repository_url = "https://github.com/trilogy-group/scintilla.git"
+github_token = "XXXX"
+
+# LLM API Keys
+anthropic_api_key = "sk-ant-api03-your-anthropic-key-here"
+openai_api_key = "sk-your-openai-key-here"
+default_llm_provider = "anthropic"
+
+# Google OAuth Configuration
+google_oauth_client_id = "your-google-oauth-client-id.googleusercontent.com"
+google_oauth_client_secret = "your-google-oauth-client-secret"
+allowed_domains = "ignitetech.com,ignitetech.ai"
+
+# Application Configuration
+debug_mode = true
+test_mode = false
+
+# Instance Configuration
+instance_type = "t3.micro"
+key_pair_name = "your-key-pair-name"
+
+# Auto Scaling Configuration
+asg_min_size = 1
+asg_max_size = 2
+asg_desired_capacity = 1
+
+# Example production overrides (uncomment and modify as needed):
+# 
+# For production environment:
+# environment = "production"
+# instance_type = "t3.medium"
+# db_instance_class = "db.r5.large"
+# asg_min_size = 2
+# asg_max_size = 10
+# asg_desired_capacity = 3
+# debug_mode = false
+# enable_deletion_protection = true
+
+# Project Configuration
+project_name = "scintilla"
+
+# Network Configuration
+vpc_cidr = "10.0.0.0/16"
+public_subnet_cidrs   = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs  = ["10.0.11.0/24", "10.0.12.0/24"]
+database_subnet_cidrs = ["10.0.21.0/24", "10.0.22.0/24"]
+
+# Enable NAT Gateway (set to false for development to save costs)
+enable_nat_gateway = true
+
+# Application Configuration
+app_port = 8000
+
+# EC2 Configuration
+key_pair_name = ""  # Optional: Set to your EC2 key pair name for SSH access
+
+# Auto Scaling Configuration
+asg_min_size         = 1
+asg_max_size         = 10
+asg_desired_capacity = 2
+
+# Database Configuration
+db_instance_class           = "db.t3.micro"
+db_name                    = "scintilla"
+db_username                = "scintilla"
+db_allocated_storage       = 20
+db_max_allocated_storage   = 100
+db_backup_retention_period = 7
+db_backup_window          = "03:00-04:00"
+db_maintenance_window     = "sun:04:00-sun:05:00"
+
+# Monitoring Configuration
+log_retention_days = 14
+
+# Domain Configuration (optional)
+domain_name     = ""  # e.g., "scintilla.example.com"
+certificate_arn = ""  # ARN of SSL certificate in ACM
+
+# Feature Flags
+enable_enhanced_monitoring = true
+enable_deletion_protection = false  # Set to true for production
+
+# ===================================================================
+# Environment-Specific Examples
+# ===================================================================
+
+# DEVELOPMENT ENVIRONMENT
+# Uncomment and modify for development:
+# environment = "development"
+# instance_type = "t3.micro"
+# db_instance_class = "db.t3.micro"
+# asg_min_size = 1
+# asg_max_size = 2
+# asg_desired_capacity = 1
+# enable_nat_gateway = false
+# enable_deletion_protection = false
+# db_backup_retention_period = 1
+# log_retention_days = 7
+
+# STAGING ENVIRONMENT
+# Uncomment and modify for staging:
+# environment = "staging"
+# instance_type = "t3.small"
+# db_instance_class = "db.t3.small"
+# asg_min_size = 1
+# asg_max_size = 4
+# asg_desired_capacity = 2
+# enable_nat_gateway = true
+# enable_deletion_protection = false
+# db_backup_retention_period = 3
+# log_retention_days = 14
+
+# PRODUCTION ENVIRONMENT
+# Uncomment and modify for production:
+# environment = "production"
+# instance_type = "t3.medium"
+# db_instance_class = "db.r5.large"
+# asg_min_size = 2
+# asg_max_size = 10
+# asg_desired_capacity = 3
+# enable_nat_gateway = true
+# enable_deletion_protection = true
+# db_backup_retention_period = 7
+# log_retention_days = 30
+# domain_name = "scintilla.yourdomain.com"
+# certificate_arn = "aaa" 

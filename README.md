@@ -245,6 +245,8 @@ scintilla/
 ├── tests/                      # Test suite
 ├── scripts/                    # Utility scripts
 ├── alembic/                    # Database migrations
+├── infra/                      # Infrastructure as Code
+│   └── terraform/              # Terraform configurations for AWS EC2 deployment
 └── requirements.txt            # Python dependencies
 ```
 
@@ -289,21 +291,216 @@ npm run lint    # ESLint checking
 | Concurrent Users | Limited (sequential) | Unlimited (cached) | **∞x better** |
 | Memory Usage | High per-request | Low (shared cache) | **90% reduction** |
 
-## 🚧 Known Areas for Cleanup
+## 🚀 AWS Deployment Strategy
 
-Based on code investigation, the following areas need attention:
+### Production Architecture Overview
 
-### Test Code in Source
-- `src/utils/url_parser.py` lines 186-209: Contains test code that should be moved to `tests/`
+Scintilla is designed for enterprise-scale deployment on AWS using modern cloud-native patterns:
 
-### TODO Items
-- Multiple TODO comments throughout the codebase for permission checks
-- Missing real-time connection testing for sources
-- Incomplete tool count tracking from MCP clients
+```
+Internet Gateway
+       ↓
+Application Load Balancer (ALB)
+       ↓
+Auto Scaling Group (EC2 instances)
+       ↓
+├── FastAPI Application (Port 8000)
+├── React Frontend (served by FastAPI)
+└── Health Check Endpoints
+       ↓
+├── RDS PostgreSQL (Multi-AZ)
+├── AWS KMS (credential encryption)
+└── CloudWatch (monitoring & logs)
+```
 
-### Potential Refactoring
-- Some debugging utilities could be consolidated in `scripts/`
-- Legacy MCP server configurations could be simplified
+### Infrastructure Components
+
+| Component | Service | Purpose | Configuration |
+|-----------|---------|---------|---------------|
+| **Compute** | EC2 Auto Scaling Group | Application hosting | t3.medium (2-10 instances) |
+| **Load Balancer** | Application Load Balancer | Traffic distribution | 4000s timeout for SSE |
+| **Database** | RDS PostgreSQL | Data persistence | db.t3.micro → db.r5.large |
+| **Caching** | In-memory (FastMCP) | Tool cache | Built-in application cache |
+| **Security** | AWS KMS | Credential encryption | Envelope encryption |
+| **Monitoring** | CloudWatch | Logs & metrics | Structured JSON logging |
+| **DNS** | Route 53 | Domain management | Health checks enabled |
+| **SSL/TLS** | ACM | Certificate management | Auto-renewal |
+
+### AWS Deployment (EC2 with Terraform)
+
+**Automated Deployment Script** (Recommended):
+```bash
+# Copy and customize configuration
+cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
+
+# Deploy to development
+./infra/deploy.sh -e development
+
+# Deploy to production (with dry run first)
+./infra/deploy.sh -e production --dry-run
+./infra/deploy.sh -e production
+```
+
+**Manual Terraform Deployment** (For advanced users):
+```bash
+cd infra/terraform
+terraform init
+terraform plan -var-file="terraform.tfvars"
+terraform apply -var-file="terraform.tfvars"
+```
+
+### Environment-Specific Configurations
+
+#### Development Environment
+- **Instance Type**: t3.micro (single instance)
+- **Database**: db.t3.micro (single AZ)
+- **SSL**: Self-signed certificates
+- **Monitoring**: Basic CloudWatch
+- **Cost**: ~$50-100/month
+
+#### Staging Environment
+- **Instance Type**: t3.small (2 instances)
+- **Database**: db.t3.small (Multi-AZ)
+- **SSL**: ACM certificates
+- **Monitoring**: Enhanced CloudWatch
+- **Cost**: ~$150-250/month
+
+#### Production Environment
+- **Instance Type**: t3.medium+ (3-10 instances)
+- **Database**: db.r5.large+ (Multi-AZ)
+- **SSL**: ACM certificates with auto-renewal
+- **Monitoring**: Full observability stack
+- **Cost**: ~$500-2000/month (depending on scale)
+
+### Security Best Practices
+
+#### Network Security
+- **VPC**: Isolated network with public/private subnets
+- **Security Groups**: Least-privilege access rules
+- **NACLs**: Additional network-level protection
+- **VPC Flow Logs**: Network traffic monitoring
+
+#### Application Security
+- **IAM Roles**: Service-specific permissions
+- **KMS Encryption**: Envelope encryption for credentials
+- **Secrets Manager**: Secure credential rotation
+- **WAF**: Web application firewall protection
+
+#### Data Security
+- **RDS Encryption**: Encryption at rest and in transit
+- **Backup Encryption**: Encrypted automated backups
+- **Access Logging**: Comprehensive audit trails
+- **Data Classification**: Sensitive data identification
+
+### Monitoring & Observability
+
+#### CloudWatch Integration
+```bash
+# Custom metrics for application performance
+aws logs create-log-group --log-group-name /aws/scintilla/application
+aws logs create-log-group --log-group-name /aws/scintilla/access
+
+# Set up alarms for critical metrics
+aws cloudwatch put-metric-alarm \
+  --alarm-name "Scintilla-HighErrorRate" \
+  --alarm-description "Error rate above threshold" \
+  --metric-name ErrorRate \
+  --namespace AWS/ApplicationELB \
+  --statistic Average \
+  --period 300 \
+  --threshold 5.0 \
+  --comparison-operator GreaterThanThreshold
+```
+
+#### Key Metrics to Monitor
+- **Application**: Response time, error rates, throughput
+- **Infrastructure**: CPU, memory, disk, network utilization
+- **Database**: Connection count, query performance, storage
+- **Business**: User engagement, query success rates, tool usage
+
+### Deployment Automation
+
+#### CI/CD Pipeline (GitHub Actions)
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to AWS
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Deploy to AWS
+        run: |
+          # Build and test
+          python -m pytest
+          npm run build
+          # Deploy infrastructure
+          terraform apply -auto-approve
+          # Deploy application
+          aws ecs update-service --force-new-deployment
+```
+
+#### Blue-Green Deployment
+```bash
+# Create new target group
+aws elbv2 create-target-group --name scintilla-green
+# Deploy new version to green environment
+# Health check validation
+# Switch traffic from blue to green
+aws elbv2 modify-listener --listener-arn $LISTENER_ARN --default-actions TargetGroupArn=$GREEN_TG
+```
+
+### Scaling Strategy
+
+#### Auto Scaling Configuration
+- **Target Tracking**: Scale based on CPU/memory utilization
+- **Predictive Scaling**: Scale ahead of predicted demand
+- **Custom Metrics**: Scale based on query volume or response time
+
+#### Database Scaling
+- **Read Replicas**: Distribute read traffic
+- **Connection Pooling**: Optimize database connections
+- **Query Optimization**: Regular performance tuning
+
+### Disaster Recovery
+
+#### Backup Strategy
+- **RDS Automated Backups**: 7-day retention
+- **Application Data**: S3 cross-region replication
+- **Infrastructure**: Versioned IaC in source control
+
+#### Recovery Procedures
+- **RTO**: 4 hours (Recovery Time Objective)
+- **RPO**: 1 hour (Recovery Point Objective)
+- **Multi-AZ**: Automatic failover for database
+- **Cross-Region**: Disaster recovery in secondary region
+
+### Cost Optimization
+
+#### Reserved Instances
+- **EC2**: 1-3 year commitments for predictable workloads
+- **RDS**: Reserved instances for database
+- **Savings Plans**: Flexible compute pricing
+
+#### Right-Sizing
+- **Instance Monitoring**: Regular review of resource utilization
+- **Auto Scaling**: Automatic adjustment to demand
+- **Spot Instances**: Cost savings for non-critical workloads
+
+### Compliance & Governance
+
+#### Regulatory Compliance
+- **SOC 2**: Security and availability controls
+- **GDPR**: Data protection and privacy
+- **HIPAA**: Healthcare data protection (if applicable)
+
+#### Governance Framework
+- **Tagging Strategy**: Consistent resource tagging
+- **Cost Allocation**: Department/project cost tracking
+- **Access Control**: Role-based access management
 
 ## 🔒 Security Features
 
@@ -312,18 +509,6 @@ Based on code investigation, the following areas need attention:
 - **Connection security** with HTTPS-only MCP connections
 - **Input validation** with Pydantic models
 - **SQL injection protection** with SQLAlchemy ORM
-
-## 🚀 Deployment
-
-### AWS Architecture
-- **Application Load Balancer** with 4000s timeout for SSE
-- **EC2 Auto Scaling Group** for application servers  
-- **RDS PostgreSQL** with Multi-AZ for high availability
-- **AWS KMS** for credential encryption
-
-### Environment-Specific Configurations
-- **Development**: Local PostgreSQL, mock authentication
-- **Production**: AWS RDS, Google OAuth, KMS encryption
 
 ## 📊 Monitoring & Observability
 
@@ -334,7 +519,11 @@ Based on code investigation, the following areas need attention:
 
 ## 📚 Additional Documentation
 
+- [`AWS_DEPLOYMENT.md`](AWS_DEPLOYMENT.md) - **Complete AWS deployment guide** with step-by-step instructions, architecture diagrams, and troubleshooting
+- [`DEPLOYMENT_CHECKLIST.md`](DEPLOYMENT_CHECKLIST.md) - **Production deployment checklist** with comprehensive verification steps
 - [`PERFORMANCE_IMPROVEMENTS.md`](PERFORMANCE_IMPROVEMENTS.md) - Detailed performance optimization documentation
+- [`BEST_PRACTICES.md`](BEST_PRACTICES.md) - Industry best practices guide covering vector databases, LLM integration, and deployment strategies
+- [`CLEANUP_LOG.md`](CLEANUP_LOG.md) - Comprehensive record of codebase cleanup activities
 - [`tests/README.md`](tests/README.md) - Testing documentation and guides
 - [`web/README.md`](web/README.md) - Frontend-specific documentation
 

@@ -20,6 +20,7 @@ function App() {
   const [searchSuggestions, setSearchSuggestions] = useState([])
   const [recentSearches, setRecentSearches] = useState(['xinet', 'scintilla architecture', 'bot configuration'])
   const searchInputRef = useRef(null)
+  const messagesEndRef = useRef(null)
   
   // Bot auto-complete functionality
   const {
@@ -53,7 +54,14 @@ function App() {
     setConversationCreatedCallback
   } = useScintilla()
 
+  // Auto-scroll to bottom when new messages arrive
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
 
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
 
   // Load previous conversations
   const loadConversations = useCallback(async () => {
@@ -144,6 +152,10 @@ function App() {
     const result = handleBotKeyDown(e)
     if (result?.selectBot) {
       selectBotSuggestion(result.selectBot, query, setQuery)
+    } else if (e.key === 'Enter' && !showBotSuggestions) {
+      // If Enter is pressed and no bot suggestions are showing, submit the form
+      e.preventDefault()
+      handleSubmit(e)
     }
   }
 
@@ -154,6 +166,10 @@ function App() {
     // Get clean message and selected bot IDs
     const { cleanMessage, botIds } = getBotSelectionData(query.trim())
     const messageToSend = cleanMessage || query.trim()
+    
+    // Clear input and selected bots immediately for better UX
+    setQuery('')
+    clearSelectedBots()
     
     // Add placeholder conversation immediately if this is a new conversation
     addPlaceholderConversation(messageToSend)
@@ -168,10 +184,6 @@ function App() {
       use_user_sources: true,
       bot_ids: botIds
     })
-    
-    // Clear input and selected bots after sending
-    setQuery('')
-    clearSelectedBots()
   }
 
   const handleLoadConversation = async (conversationId) => {
@@ -876,6 +888,8 @@ function App() {
                       </div>
                     </div>
                   )}
+                  {/* Scroll target */}
+                  <div ref={messagesEndRef} />
                 </div>
               </div>
 

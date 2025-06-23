@@ -120,6 +120,7 @@ out/
 
 # React build output
 build/
+dist/
 
 # =============================================================================
 # AWS / Cloud
@@ -132,6 +133,8 @@ build/
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+terraform.tfvars
+*terraform.tfvars.backup
 
 # CDK
 cdk.out/
@@ -266,4 +269,29 @@ deploy/
 
 # Logs
 scintilla.log
-scintilla_test.log 
+scintilla_test.log
+
+# =============================================================================
+# Additional Terraform and Infrastructure
+# =============================================================================
+# Terraform variable files with sensitive data
+*.tfvars
+!*.tfvars.example
+# Terraform plan files
+*.tfplan
+# Terraform crash logs
+crash.log
+crash.*.log
+
+# =============================================================================
+# Additional Build and Test Artifacts
+# =============================================================================
+# Test output
+*_test.log
+test_*.log
+# Coverage reports
+.coverage.*
+htmlcov/
+# Build artifacts
+build/
+dist/ 
