@@ -95,13 +95,11 @@ data "aws_subnets" "database" {
   }
 }
 
-# Simplified subnet selection - manually select 2 subnets from different AZs
+# Simplified subnet selection - use only verified public subnet for ALB
 locals {
-  # Manually select only 2 subnets that are most likely in different AZs
-  # Use the first public subnet and first private subnet to maximize AZ diversity
+  # Use only the confirmed public subnet for ALB for now
   alb_subnets = [
-    "subnet-071090cb33bb5d24a",  # Public subnet (likely AZ 1)
-    "subnet-04121b354df4d865a"   # Private subnet (likely AZ 2)
+    "subnet-071090cb33bb5d24a"   # Confirmed public subnet (us-east-1a)
   ]
 }
 
@@ -158,11 +156,40 @@ resource "aws_security_group" "app" {
     cidr_blocks = [data.aws_vpc.main.cidr_block]
   }
 
+  # Allow outbound HTTPS for package downloads and AWS services
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "HTTPS outbound"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow outbound HTTP for package downloads
+  egress {
+    description = "HTTP outbound"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow DNS
+  egress {
+    description = "DNS outbound"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow database connections to private subnets
+  egress {
+    description = "PostgreSQL to database"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.main.cidr_block]
   }
 
   tags = {
@@ -464,10 +491,10 @@ resource "aws_iam_instance_profile" "app" {
   role = aws_iam_role.app.name
 }
 
-# Auto Scaling Group - use existing private subnets
+# Auto Scaling Group - use specific working private subnets 
 resource "aws_autoscaling_group" "app" {
   name                = "${var.project_name}-asg"
-  vpc_zone_identifier = data.aws_subnets.private.ids
+  vpc_zone_identifier = ["subnet-04121b354df4d865a", "subnet-07267589d18bc0008"]
   target_group_arns   = [aws_lb_target_group.app.arn]
   health_check_type   = "ELB"
   health_check_grace_period = 300
@@ -581,4 +608,6 @@ resource "aws_cloudwatch_log_group" "access" {
   tags = {
     Name = "${var.project_name}-access-logs"
   }
-} 
+}
+
+ 
