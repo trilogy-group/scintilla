@@ -37,10 +37,12 @@ sudo alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 sudo alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
 echo "Python version: $(python3 --version)"
 
-# Install Node.js 18 (Amazon Linux 2023 supports it natively)
+# Install Node.js 18 - Use direct binary installation to avoid dnf/Python conflicts
 echo "Installing Node.js 18..."
-curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-sudo dnf install -y nodejs
+# Download and install Node.js directly to avoid dnf Python dependency issues
+curl -fsSL https://nodejs.org/dist/v18.20.4/node-v18.20.4-linux-x64.tar.xz | sudo tar -xJ -C /usr/local --strip-components=1
+echo "Node.js version: $(node --version)"
+echo "npm version: $(npm --version)"
 
 # Configure AWS CLI
 echo "Configuring AWS CLI..."
