@@ -464,10 +464,10 @@ resource "aws_iam_instance_profile" "app" {
   role = aws_iam_role.app.name
 }
 
-# Auto Scaling Group - use specific working private subnets 
+# Auto Scaling Group - use only NAT Gateway subnet for reliable internet access
 resource "aws_autoscaling_group" "app" {
   name                = "${var.project_name}-asg"
-  vpc_zone_identifier = ["subnet-04121b354df4d865a", "subnet-07267589d18bc0008"]
+  vpc_zone_identifier = ["subnet-04121b354df4d865a"]
   target_group_arns   = [aws_lb_target_group.app.arn]
   health_check_type   = "ELB"
   health_check_grace_period = 300

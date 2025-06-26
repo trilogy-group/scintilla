@@ -14,13 +14,13 @@ echo "Starting Scintilla full installation at $(date)"
 # GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, ALLOWED_DOMAINS
 # DEBUG_MODE, TEST_MODE
 
-# Update system (AL2023 uses dnf)
+# Update system (Amazon Linux 2 uses yum)
 echo "Updating system packages..."
-sudo dnf update -y
+sudo yum update -y
 
 # Install required packages
 echo "Installing required packages..."
-sudo dnf install -y \
+sudo yum install -y \
     python3 \
     python3-pip \
     git \
@@ -30,10 +30,10 @@ sudo dnf install -y \
     amazon-cloudwatch-agent \
     nginx
 
-# Install Node.js 18 (AL2023 supports it natively)
+# Install Node.js 18 (for Amazon Linux 2)
 echo "Installing Node.js 18..."
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-sudo dnf install -y nodejs
+curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+sudo yum install -y nodejs
 
 # Configure AWS CLI
 echo "Configuring AWS CLI..."
