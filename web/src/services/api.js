@@ -1,7 +1,12 @@
 // Scintilla API Service
 // Handles communication with the backend search system
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+// Smart API URL detection:
+// - Development: Use full localhost URL (frontend runs on different port)
+// - Production: Use relative URLs (frontend and backend on same domain)
+// - Override: VITE_API_URL environment variable takes precedence
+const BASE_URL = import.meta.env.VITE_API_URL || 
+  (import.meta.env.DEV ? 'http://localhost:8000' : '')
 
 class APIService {
   constructor() {
