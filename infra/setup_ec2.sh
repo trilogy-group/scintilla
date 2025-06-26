@@ -65,11 +65,12 @@ cd /opt/scintilla
 # Configure git for GitHub token authentication
 if [ -n "$GITHUB_TOKEN" ]; then
     echo "Configuring GitHub authentication..."
+    export HOME="/root"
     git config --global credential.helper store
-    echo "https://x-access-token:$GITHUB_TOKEN@github.com" > ~/.git-credentials
+    echo "https://x-access-token:$GITHUB_TOKEN@github.com" > /root/.git-credentials
     
     echo "Cloning repository: $GITHUB_REPOSITORY_URL"
-    sudo git clone "$GITHUB_REPOSITORY_URL" app && {
+    git clone "$GITHUB_REPOSITORY_URL" app && {
         echo "Repository cloned successfully"
         sudo chown -R scintilla:scintilla /opt/scintilla/app
     } || {
