@@ -136,32 +136,32 @@ debug_network() {
     # Test internal AWS services first
     echo "Testing AWS metadata service..."
     if curl -s --connect-timeout 5 http://169.254.169.254/latest/meta-data/instance-id; then
-        echo "✓ AWS metadata service reachable"
+        echo "[OK] AWS metadata service reachable"
     else
-        echo "✗ AWS metadata service unreachable"
+        echo "[FAIL] AWS metadata service unreachable"
     fi
     
     # Test DNS resolution
     echo "Testing DNS resolution..."
     if nslookup amazon.com; then
-        echo "✓ DNS resolution working"
+        echo "[OK] DNS resolution working"
     else
-        echo "✗ DNS resolution failed"
+        echo "[FAIL] DNS resolution failed"
     fi
     
     # Test HTTP/HTTPS connectivity (this is what actually matters)
     echo "Testing HTTP connectivity to AWS..."
     if curl -I --connect-timeout 10 --max-time 15 http://s3.amazonaws.com/ 2>/dev/null | grep -q "HTTP"; then
-        echo "✓ HTTP to AWS working"
+        echo "[OK] HTTP to AWS working"
     else
-        echo "✗ HTTP to AWS failed"
+        echo "[FAIL] HTTP to AWS failed"
     fi
     
     echo "Testing HTTPS connectivity to AWS..."
     if curl -I --connect-timeout 10 --max-time 15 https://s3.amazonaws.com/ 2>/dev/null | grep -q "HTTP"; then
-        echo "✓ HTTPS to AWS working"
+        echo "[OK] HTTPS to AWS working"
     else
-        echo "✗ HTTPS to AWS failed"
+        echo "[FAIL] HTTPS to AWS failed"
     fi
     
     echo "=== End Network Debug ==="
@@ -182,12 +182,12 @@ test_http_connectivity() {
     for endpoint in "${endpoints[@]}"; do
         echo "Testing: $endpoint"
         if curl -I --connect-timeout 10 --max-time 15 "$endpoint" 2>/dev/null | grep -q "HTTP"; then
-            echo "✓ HTTP connectivity confirmed via $endpoint"
+            echo "[OK] HTTP connectivity confirmed via $endpoint"
             return 0
         fi
     done
     
-    echo "✗ No HTTP connectivity detected"
+    echo "[FAIL] No HTTP connectivity detected"
     return 1
 }
 
@@ -202,10 +202,10 @@ echo "Testing HTTP connectivity..."
 
 # Use HTTP connectivity test instead of ping
 if test_http_connectivity; then
-    echo "✓ Internet connectivity confirmed - proceeding with full setup"
+    echo "[OK] Internet connectivity confirmed - proceeding with full setup"
     connectivity_ok=true
 else
-    echo "✗ No reliable internet connectivity - will create minimal application"
+    echo "[FAIL] No reliable internet connectivity - will create minimal application"
     connectivity_ok=false
 fi
 
