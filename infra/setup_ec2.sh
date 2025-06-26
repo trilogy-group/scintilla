@@ -27,7 +27,6 @@ sudo dnf install -y \
     git \
     docker \
     htop \
-    awscli \
     amazon-cloudwatch-agent \
     nginx
 
@@ -36,6 +35,11 @@ echo "Setting up Python 3.11 as default..."
 sudo alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 sudo alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
 echo "Python version: $(python3 --version)"
+
+# Install AWS CLI via pip for Python 3.11 compatibility
+echo "Installing AWS CLI for Python 3.11..."
+sudo python3.11 -m pip install awscli
+echo "AWS CLI version: $(aws --version)"
 
 # Install Node.js 18 - Use direct binary installation to avoid dnf/Python conflicts
 echo "Installing Node.js 18..."
