@@ -88,7 +88,7 @@ Type=simple
 User=scintilla
 Group=scintilla
 WorkingDirectory=/opt/scintilla/app
-ExecStart=/usr/bin/python3 src/main.py
+ExecStart=/usr/bin/python3 -m src.main
 Restart=always
 RestartSec=10
 

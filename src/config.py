@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # Application
     debug: bool = Field(default=False, env="DEBUG")
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    host: str = Field(default="0.0.0.0", env="HOST")
     api_port: int = Field(default=8000, env="API_PORT")
     
     # Test Mode - bypass MCP for faster development

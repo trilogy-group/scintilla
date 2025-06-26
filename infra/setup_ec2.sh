@@ -125,7 +125,7 @@ EOF
 
     # Create basic main.py for the application
     sudo cat > /opt/scintilla/app/src/main.py << 'EOF'
-#!/usr/bin/env python3.11
+#!/usr/bin/env python3
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -204,6 +204,7 @@ AWS_KMS_KEY_ID=$KMS_KEY_ID
 # Application Configuration
 DEBUG=$DEBUG_MODE
 TEST_MODE=$TEST_MODE
+HOST=0.0.0.0
 API_PORT=8000
 LOG_LEVEL=INFO
 
@@ -211,15 +212,17 @@ LOG_LEVEL=INFO
 GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID
 GOOGLE_OAUTH_CLIENT_SECRET=$GOOGLE_OAUTH_CLIENT_SECRET
 ALLOWED_DOMAINS=$ALLOWED_DOMAINS
+JWT_SECRET_KEY=production_jwt_secret_$(date +%s)_$(openssl rand -hex 16)
+
+# Encryption (for development)
+ENCRYPTION_PASSWORD=scintilla_prod_encryption_key_$(openssl rand -hex 16)
 
 # LLM Configuration
 ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 OPENAI_API_KEY=$OPENAI_API_KEY
 DEFAULT_LLM_PROVIDER=$DEFAULT_LLM_PROVIDER
-
-# GitHub Configuration (for development/debugging)
-GITHUB_TOKEN=$GITHUB_TOKEN
-GITHUB_REPOSITORY_URL=$GITHUB_REPOSITORY_URL
+DEFAULT_OPENAI_MODEL=gpt-4o
+DEFAULT_ANTHROPIC_MODEL=claude-sonnet-4-20250514
 EOF
 
 sudo chown scintilla:scintilla /opt/scintilla/app/.env
@@ -239,7 +242,7 @@ Group=scintilla
 WorkingDirectory=/opt/scintilla/app
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/opt/scintilla/app
-ExecStart=/usr/bin/python3 src/main.py
+ExecStart=/usr/bin/python3 -m src.main
 Restart=always
 RestartSec=10
 StandardOutput=journal
