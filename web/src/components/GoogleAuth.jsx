@@ -1,19 +1,20 @@
 import { useState, useEffect } from 'react'
 import { User, LogOut, AlertCircle } from 'lucide-react'
+import api from '../services/api'
 
-const GoogleAuth = ({ onAuthChange }) => {
+const GoogleAuth = ({ onAuthChange, showOnlyLogin = false }) => {
   const [user, setUser] = useState(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true) // Start as loading
   const [error, setError] = useState(null)
   const [authConfig, setAuthConfig] = useState(null)
 
   // Load Google OAuth script
   useEffect(() => {
-    // Load auth config from backend
-    fetch('/api/auth/config')
-      .then(res => res.json())
-      .then(config => {
+    const loadAuthConfig = async () => {
+      try {
+        const config = await api.getAuthConfig()
         setAuthConfig(config)
+        setIsLoading(false)
         
         if (config.auth_enabled && config.google_oauth_client_id) {
           // Load Google OAuth script
@@ -29,16 +30,23 @@ const GoogleAuth = ({ onAuthChange }) => {
             }
           }
         }
-      })
-      .catch(err => {
-        console.error('Failed to load auth config:', err)
-        setError('Failed to load authentication configuration')
-      })
+      } catch (err) {
+        console.warn('Auth config load failed:', err.message)
+        setError('Authentication system unavailable')
+        setIsLoading(false)
+      }
+    }
 
-    // Check for existing token
+    // Check for existing token first
     const token = localStorage.getItem('scintilla_token')
     if (token) {
-      validateToken(token)
+      validateToken(token).finally(() => {
+        if (!user) {
+          loadAuthConfig()
+        }
+      })
+    } else {
+      loadAuthConfig()
     }
   }, [])
 
@@ -53,27 +61,23 @@ const GoogleAuth = ({ onAuthChange }) => {
 
   const validateToken = async (token) => {
     try {
-      const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      if (response.ok) {
-        const userData = await response.json()
-        setUser(userData)
-        onAuthChange?.(userData, token)
-      } else {
-        // Token invalid, remove it
-        localStorage.removeItem('scintilla_token')
-        setUser(null)
-        onAuthChange?.(null, null)
-      }
+      // Set token in API service temporarily for validation
+      const oldToken = api.authToken
+      api.setAuthToken(token)
+      
+      const userData = await api.getMe()
+      setUser(userData)
+      setIsLoading(false)
+      onAuthChange?.(userData, token)
+      return true
     } catch (err) {
-      console.error('Token validation failed:', err)
+      console.warn('Token validation failed:', err.message)
       localStorage.removeItem('scintilla_token')
       setUser(null)
+      setIsLoading(false)
       onAuthChange?.(null, null)
+      api.clearAuthToken()
+      return false
     }
   }
 
@@ -82,22 +86,7 @@ const GoogleAuth = ({ onAuthChange }) => {
     setError(null)
 
     try {
-      const loginResponse = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          google_token: response.credential
-        })
-      })
-
-      if (!loginResponse.ok) {
-        const errorData = await loginResponse.json()
-        throw new Error(errorData.detail || 'Login failed')
-      }
-
-      const data = await loginResponse.json()
+      const data = await api.login(response.credential)
       
       // Store token
       localStorage.setItem('scintilla_token', data.token)
@@ -107,7 +96,7 @@ const GoogleAuth = ({ onAuthChange }) => {
       onAuthChange?.(data.user, data.token)
       
     } catch (err) {
-      console.error('Login failed:', err)
+      console.warn('Login failed:', err.message)
       setError(err.message)
     } finally {
       setIsLoading(false)
@@ -125,18 +114,14 @@ const GoogleAuth = ({ onAuthChange }) => {
   const handleLogout = async () => {
     try {
       // Call logout endpoint
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('scintilla_token')}`
-        }
-      })
+      await api.logout()
     } catch (err) {
       console.error('Logout request failed:', err)
     }
 
     // Clear local state regardless of API call success
     localStorage.removeItem('scintilla_token')
+    api.clearAuthToken()
     setUser(null)
     onAuthChange?.(null, null)
     
@@ -146,22 +131,33 @@ const GoogleAuth = ({ onAuthChange }) => {
     }
   }
 
-  // Don't render if auth is not enabled
-  if (authConfig && !authConfig.auth_enabled) {
-    return (
-      <div className="flex items-center space-x-2 text-gray-500">
-        <User className="h-5 w-5" />
-        <span className="text-sm">Dev Mode</span>
-      </div>
-    )
-  }
-
   // Loading state
-  if (!authConfig) {
+  if (isLoading) {
     return (
       <div className="flex items-center space-x-2 text-gray-400">
         <User className="h-5 w-5 animate-pulse" />
         <span className="text-sm">Loading...</span>
+      </div>
+    )
+  }
+
+  // Don't render if auth is not enabled (dev mode) - auto-authenticate
+  if (authConfig && !authConfig.auth_enabled) {
+    // In dev mode, auto-authenticate as a mock user
+    if (!user) {
+      const mockUser = {
+        name: 'Developer',
+        email: 'dev@ignitetech.com',
+        picture_url: null
+      }
+      setUser(mockUser)
+      onAuthChange?.(mockUser, 'dev-token')
+    }
+    
+    return (
+      <div className="flex items-center space-x-2 text-gray-500">
+        <User className="h-5 w-5" />
+        <span className="text-sm">Dev Mode</span>
       </div>
     )
   }
@@ -220,6 +216,38 @@ const GoogleAuth = ({ onAuthChange }) => {
   }
 
   // Unauthenticated state
+  if (showOnlyLogin) {
+    // Landing page style - large prominent button
+    return (
+      <div className="flex flex-col items-center space-y-4">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+            Welcome to Scintilla
+          </h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">
+            Please sign in with your IgniteTech account to continue
+          </p>
+        </div>
+        <button
+          onClick={handleLogin}
+          disabled={isLoading}
+          className={`flex items-center space-x-3 px-8 py-4 text-lg font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition-colors shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 ${
+            isLoading ? 'opacity-50 cursor-not-allowed' : ''
+          }`}
+        >
+          <User className="h-6 w-6" />
+          <span>{isLoading ? 'Signing in...' : 'Sign in with Google'}</span>
+        </button>
+        {error && (
+          <div className="text-red-600 text-sm mt-2 max-w-md text-center">
+            {error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Header style - compact button
   return (
     <div className="flex items-center space-x-2">
       <button

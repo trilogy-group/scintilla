@@ -242,6 +242,7 @@ Group=scintilla
 WorkingDirectory=/opt/scintilla/app
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/opt/scintilla/app
+EnvironmentFile=/opt/scintilla/app/.env
 ExecStart=/usr/bin/python3 -m src.main
 Restart=always
 RestartSec=10

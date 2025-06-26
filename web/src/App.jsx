@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Search, Send, Settings, User, BookOpen, Github, Code, Database, MessageSquare, AlertCircle, CheckCircle, RefreshCw, Bot, Server, Clock, Trash2, Plus, Filter, X } from 'lucide-react'
 import { useScintilla } from './hooks/useScintilla'
+import { useAuth } from './hooks/useAuth'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from './hooks/useBotAutoComplete.jsx'
 import CitationRenderer from './components/CitationRenderer'
 import { SourcesManager } from './components/SourcesManager'
@@ -20,23 +21,21 @@ function App() {
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const [searchSuggestions, setSearchSuggestions] = useState([])
   const [recentSearches, setRecentSearches] = useState(['xinet', 'scintilla architecture', 'bot configuration'])
-  const [currentUser, setCurrentUser] = useState(null)
-  const [authToken, setAuthToken] = useState(null)
   const searchInputRef = useRef(null)
   const messagesEndRef = useRef(null)
   
-  // Handle authentication state changes
-  const handleAuthChange = useCallback((user, token) => {
-    setCurrentUser(user)
-    setAuthToken(token)
-    
-    // Update API service with new token
-    if (token) {
+  // Authentication hook
+  const { user: currentUser, isLoading: authLoading, isAuthenticated, handleAuthChange, requireAuth } = useAuth()
+  
+  // Update API service when auth changes
+  useEffect(() => {
+    const token = localStorage.getItem('scintilla_token')
+    if (token && isAuthenticated) {
       api.setAuthToken(token)
     } else {
       api.clearAuthToken()
     }
-  }, [])
+  }, [isAuthenticated])
   
   // Bot auto-complete functionality
   const {
@@ -78,6 +77,14 @@ function App() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Redirect to landing if not authenticated
+  useEffect(() => {
+    if (!authLoading && requireAuth(currentView)) {
+      setShowLanding(true)
+      setCurrentView('landing')
+    }
+  }, [authLoading, isAuthenticated, currentView, requireAuth])
 
   // Load previous conversations
   const loadConversations = useCallback(async () => {
@@ -334,13 +341,35 @@ function App() {
 
   // Handle navigation from landing page
   const handleLandingNavigation = (section) => {
+    if (!isAuthenticated) {
+      // Don't allow navigation if not authenticated
+      return
+    }
     setShowLanding(false) // Hide landing page
     setCurrentView(section) // Switch to the requested view
   }
 
+  // Handle navigation in header
+  const handleViewChange = (view) => {
+    if (!isAuthenticated && view !== 'landing') {
+      // Redirect to landing if not authenticated
+      setShowLanding(true)
+      setCurrentView('landing')
+      return
+    }
+    setCurrentView(view)
+    if (view !== 'landing') {
+      setShowLanding(false)
+    }
+  }
+
   // If landing page should be shown, render it
   if (showLanding) {
-    return <LandingPage onSearch={handleLandingSearch} onNavigate={handleLandingNavigation} />
+    return <LandingPage 
+      onSearch={handleLandingSearch} 
+      onNavigate={handleLandingNavigation} 
+      isAuthenticated={isAuthenticated}
+    />
   }
 
   return (
@@ -356,7 +385,7 @@ function App() {
                 className="flex items-center space-x-3 hover:opacity-75 transition-opacity"
               >
                 <img 
-                  src="/img/scintilla_icon.svg" 
+                  src="./img/scintilla_icon.svg" 
                   alt="Scintilla" 
                   className="h-8 w-8"
                 />
@@ -374,41 +403,43 @@ function App() {
             {/* Navigation and Status - Right */}
             <div className="flex items-center space-x-4">
               {/* Navigation */}
-              <nav className="flex items-center space-x-2">
-                <button
-                  onClick={() => setCurrentView('chat')}
-                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-                    currentView === 'chat' 
-                      ? 'bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300' 
-                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
-                  }`}
-                >
-                  <MessageSquare className="h-4 w-4" />
-                  <span>Chat</span>
-                </button>
-                <button
-                  onClick={() => setCurrentView('sources')}
-                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-                    currentView === 'sources' 
-                      ? 'bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300' 
-                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
-                  }`}
-                >
-                  <Server className="h-4 w-4" />
-                  <span>Sources</span>
-                </button>
-                <button
-                  onClick={() => setCurrentView('bots')}
-                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-                    currentView === 'bots' 
-                      ? 'bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300' 
-                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
-                  }`}
-                >
-                  <Bot className="h-4 w-4" />
-                  <span>Bots</span>
-                </button>
-              </nav>
+              {isAuthenticated && (
+                <nav className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleViewChange('chat')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      currentView === 'chat' 
+                        ? 'bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300' 
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    <span>Chat</span>
+                  </button>
+                  <button
+                    onClick={() => handleViewChange('sources')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      currentView === 'sources' 
+                        ? 'bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300' 
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    <Server className="h-4 w-4" />
+                    <span>Sources</span>
+                  </button>
+                  <button
+                    onClick={() => handleViewChange('bots')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      currentView === 'bots' 
+                        ? 'bg-scintilla-100 dark:bg-scintilla-900 text-scintilla-700 dark:text-scintilla-300' 
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    <Bot className="h-4 w-4" />
+                    <span>Bots</span>
+                  </button>
+                </nav>
+              )}
 
               {/* Connection Status */}
               <div className="flex items-center space-x-2">

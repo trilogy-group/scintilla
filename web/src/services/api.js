@@ -240,6 +240,28 @@ class APIService {
     })
   }
 
+  // Auth endpoints
+  async getAuthConfig() {
+    return this.request('/api/auth/config')
+  }
+
+  async login(googleToken) {
+    return this.request('/api/auth/login', {
+      method: 'POST',
+      body: { google_token: googleToken }
+    })
+  }
+
+  async getMe() {
+    return this.request('/api/auth/me')
+  }
+
+  async logout() {
+    return this.request('/api/auth/logout', {
+      method: 'POST'
+    })
+  }
+
   // Health check
   async healthCheck() {
     return this.request('/health')
