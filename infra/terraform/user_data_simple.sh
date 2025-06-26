@@ -31,8 +31,13 @@ create_minimal_app() {
     echo "Creating minimal Scintilla application..."
     
     # Update system packages
-    yum update -y
-    yum install -y python3 python3-pip nginx
+    dnf update -y
+    dnf install -y python3.11 python3.11-pip python3.11-devel nginx
+    
+    # Set up Python 3.11 as default python3
+    alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
+    echo "Python version: $(python3 --version)"
     
     # Create application structure
     mkdir -p /opt/scintilla/app/src
@@ -46,7 +51,8 @@ uvicorn[standard]==0.24.0
 psycopg2-binary==2.9.9
 EOF
     
-    python3 -m pip install -r /opt/scintilla/app/requirements.txt
+    python3.11 -m pip install --upgrade pip
+    python3.11 -m pip install -r /opt/scintilla/app/requirements.txt
     
     # Create minimal main.py
     cat > /opt/scintilla/app/src/main.py << 'EOF'
@@ -82,7 +88,7 @@ Type=simple
 User=scintilla
 Group=scintilla
 WorkingDirectory=/opt/scintilla/app
-ExecStart=/usr/bin/python3 src/main.py
+ExecStart=/usr/bin/python3.11 src/main.py
 Restart=always
 RestartSec=10
 

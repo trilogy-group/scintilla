@@ -21,14 +21,21 @@ sudo dnf update -y
 # Install required packages
 echo "Installing required packages..."
 sudo dnf install -y \
-    python3 \
-    python3-pip \
+    python3.11 \
+    python3.11-pip \
+    python3.11-devel \
     git \
     docker \
     htop \
     awscli \
     amazon-cloudwatch-agent \
     nginx
+
+# Set up Python 3.11 as default python3
+echo "Setting up Python 3.11 as default..."
+sudo alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+sudo alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1
+echo "Python version: $(python3 --version)"
 
 # Install Node.js 18 (Amazon Linux 2023 supports it natively)
 echo "Installing Node.js 18..."
@@ -112,7 +119,7 @@ EOF
 
     # Create basic main.py for the application
     sudo cat > /opt/scintilla/app/src/main.py << 'EOF'
-#!/usr/bin/env python3
+#!/usr/bin/env python3.11
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -150,7 +157,7 @@ EOF
 echo "Installing Python dependencies..."
 cd /opt/scintilla/app
 # Skip pip upgrade to avoid RPM conflict, just install requirements
-sudo python3 -m pip install -r requirements.txt
+sudo python3.11 -m pip install -r requirements.txt
 
 # Build frontend on the server
 echo "Building frontend..."
@@ -226,7 +233,7 @@ Group=scintilla
 WorkingDirectory=/opt/scintilla/app
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/opt/scintilla/app
-ExecStart=/usr/bin/python3 src/main.py
+ExecStart=/usr/bin/python3.11 src/main.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -312,7 +319,7 @@ cd /opt/scintilla/app
 # Wait for database to be available
 echo "Waiting for database to be available..."
 for i in {1..30}; do
-    if python3 -c "
+    if python3.11 -c "
 import psycopg2
 import os
 try:
