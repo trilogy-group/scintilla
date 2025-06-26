@@ -95,11 +95,12 @@ data "aws_subnets" "database" {
   }
 }
 
-# Simplified subnet selection - use only verified public subnet for ALB
+# ALB subnet selection - requires 2 subnets in different AZs
 locals {
-  # Use only the confirmed public subnet for ALB for now
+  # Use both available subnets from different AZs for ALB
   alb_subnets = [
-    "subnet-071090cb33bb5d24a"   # Confirmed public subnet (us-east-1a)
+    "subnet-071090cb33bb5d24a",   # Public subnet (us-east-1a)
+    "subnet-07267589d18bc0008"    # Private subnet (us-east-1c) - ALB can use mixed public/private
   ]
 }
 
@@ -156,40 +157,12 @@ resource "aws_security_group" "app" {
     cidr_blocks = [data.aws_vpc.main.cidr_block]
   }
 
-  # Allow outbound HTTPS for package downloads and AWS services
+  # Allow all outbound traffic (instances are in private subnets, so this is secure)
   egress {
-    description = "HTTPS outbound"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow outbound HTTP for package downloads
-  egress {
-    description = "HTTP outbound"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow DNS
-  egress {
-    description = "DNS outbound"
-    from_port   = 53
-    to_port     = 53
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow database connections to private subnets
-  egress {
-    description = "PostgreSQL to database"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.main.cidr_block]
   }
 
   tags = {

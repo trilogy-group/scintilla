@@ -26,123 +26,7 @@ TEST_MODE="${test_mode}"
 exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 echo "Starting Scintilla bootstrap at $(date)"
 
-# Comprehensive network debugging
-debug_network() {
-    echo "=== Network Debug Information ==="
-    echo "Network interfaces:"
-    ip addr show
-    echo ""
-    echo "Routing table:"
-    ip route show
-    echo ""
-    echo "DNS configuration:"
-    cat /etc/resolv.conf
-    echo ""
-    echo "Testing connectivity to different endpoints:"
-    
-    # Test internal AWS services first
-    echo "Testing AWS metadata service..."
-    if curl -s --connect-timeout 5 http://169.254.169.254/latest/meta-data/instance-id; then
-        echo "✓ AWS metadata service reachable"
-    else
-        echo "✗ AWS metadata service unreachable"
-    fi
-    
-    # Test DNS resolution
-    echo "Testing DNS resolution..."
-    if nslookup amazon.com; then
-        echo "✓ DNS resolution working"
-    else
-        echo "✗ DNS resolution failed"
-    fi
-    
-    # Test specific endpoints
-    echo "Testing ping to 8.8.8.8 (Google DNS)..."
-    ping -c 3 8.8.8.8 || echo "✗ Ping to 8.8.8.8 failed"
-    
-    echo "Testing ping to 169.254.169.254 (AWS metadata)..."
-    ping -c 3 169.254.169.254 || echo "✗ Ping to metadata failed"
-    
-    # Test HTTP/HTTPS connectivity
-    echo "Testing HTTP connectivity to AWS..."
-    curl -I --connect-timeout 10 --max-time 15 http://s3.amazonaws.com/ || echo "✗ HTTP to AWS failed"
-    
-    echo "Testing HTTPS connectivity to AWS..."
-    curl -I --connect-timeout 10 --max-time 15 https://s3.amazonaws.com/ || echo "✗ HTTPS to AWS failed"
-    
-    echo "=== End Network Debug ==="
-}
-
-# Test network connectivity with detailed debugging
-echo "Starting comprehensive network tests..."
-debug_network
-
-# Wait a bit for network to stabilize, then test again
-echo "Waiting 30 seconds for network to stabilize..."
-sleep 30
-echo "Testing network again after wait..."
-
-# Test with timeout and retries
-test_connectivity() {
-    local target="$1"
-    local description="$2"
-    local max_attempts=3
-    
-    for attempt in $(seq 1 $max_attempts); do
-        echo "Testing $description (attempt $attempt/$max_attempts)..."
-        if ping -c 3 -W 5 "$target"; then
-            echo "✓ $description successful"
-            return 0
-        else
-            echo "✗ $description failed (attempt $attempt)"
-            if [ $attempt -lt $max_attempts ]; then
-                echo "Retrying in 10 seconds..."
-                sleep 10
-            fi
-        fi
-    done
-    return 1
-}
-
-# Test multiple connectivity targets
-connectivity_ok=false
-if test_connectivity "8.8.8.8" "Google DNS"; then
-    connectivity_ok=true
-elif test_connectivity "1.1.1.1" "Cloudflare DNS"; then
-    connectivity_ok=true
-elif test_connectivity "169.254.169.254" "AWS Metadata"; then
-    echo "Limited connectivity - AWS metadata reachable"
-    connectivity_ok=true
-fi
-
-if [ "$connectivity_ok" = false ]; then
-    echo "ERROR: No internet connectivity detected - creating minimal application"
-    create_minimal_app
-    exit 0
-fi
-
-# Test DNS resolution
-echo "Testing DNS resolution..."
-if ! nslookup github.com; then
-    echo "WARNING: DNS resolution failed for github.com"
-    # Try setting alternative DNS
-    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-    if ! nslookup github.com; then
-        echo "ERROR: DNS resolution still failing - creating minimal application"
-        create_minimal_app
-        exit 0
-    fi
-fi
-
-# Export all variables for the setup script
-export DB_HOST DB_NAME DB_USERNAME DB_PASSWORD KMS_KEY_ID AWS_REGION
-export GITHUB_REPOSITORY_URL GITHUB_TOKEN 
-export ANTHROPIC_API_KEY OPENAI_API_KEY DEFAULT_LLM_PROVIDER
-export GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET ALLOWED_DOMAINS
-export DEBUG_MODE TEST_MODE
-
-# Function to create minimal working application
+# Function to create minimal working application (defined early)
 create_minimal_app() {
     echo "Creating minimal Scintilla application..."
     
@@ -235,6 +119,118 @@ EOF
     echo "Minimal Scintilla application started successfully"
 }
 
+# Comprehensive network debugging
+debug_network() {
+    echo "=== Network Debug Information ==="
+    echo "Network interfaces:"
+    ip addr show
+    echo ""
+    echo "Routing table:"
+    ip route show
+    echo ""
+    echo "DNS configuration:"
+    cat /etc/resolv.conf
+    echo ""
+    echo "Testing connectivity to different endpoints:"
+    
+    # Test internal AWS services first
+    echo "Testing AWS metadata service..."
+    if curl -s --connect-timeout 5 http://169.254.169.254/latest/meta-data/instance-id; then
+        echo "✓ AWS metadata service reachable"
+    else
+        echo "✗ AWS metadata service unreachable"
+    fi
+    
+    # Test DNS resolution
+    echo "Testing DNS resolution..."
+    if nslookup amazon.com; then
+        echo "✓ DNS resolution working"
+    else
+        echo "✗ DNS resolution failed"
+    fi
+    
+    # Test HTTP/HTTPS connectivity (this is what actually matters)
+    echo "Testing HTTP connectivity to AWS..."
+    if curl -I --connect-timeout 10 --max-time 15 http://s3.amazonaws.com/ 2>/dev/null | grep -q "HTTP"; then
+        echo "✓ HTTP to AWS working"
+    else
+        echo "✗ HTTP to AWS failed"
+    fi
+    
+    echo "Testing HTTPS connectivity to AWS..."
+    if curl -I --connect-timeout 10 --max-time 15 https://s3.amazonaws.com/ 2>/dev/null | grep -q "HTTP"; then
+        echo "✓ HTTPS to AWS working"
+    else
+        echo "✗ HTTPS to AWS failed"
+    fi
+    
+    echo "=== End Network Debug ==="
+}
+
+# Test HTTP connectivity (not ping, since ping often fails but HTTP works)
+test_http_connectivity() {
+    echo "Testing HTTP connectivity to determine if internet is available..."
+    
+    # Test multiple endpoints
+    local endpoints=(
+        "http://s3.amazonaws.com/"
+        "https://s3.amazonaws.com/"
+        "http://amazon.com/"
+        "https://api.github.com/"
+    )
+    
+    for endpoint in "${endpoints[@]}"; do
+        echo "Testing: $endpoint"
+        if curl -I --connect-timeout 10 --max-time 15 "$endpoint" 2>/dev/null | grep -q "HTTP"; then
+            echo "✓ HTTP connectivity confirmed via $endpoint"
+            return 0
+        fi
+    done
+    
+    echo "✗ No HTTP connectivity detected"
+    return 1
+}
+
+# Test network connectivity with detailed debugging
+echo "Starting comprehensive network tests..."
+debug_network
+
+# Wait a bit for network to stabilize, then test again
+echo "Waiting 10 seconds for network to stabilize..."
+sleep 10
+echo "Testing HTTP connectivity..."
+
+# Use HTTP connectivity test instead of ping
+if test_http_connectivity; then
+    echo "✓ Internet connectivity confirmed - proceeding with full setup"
+    connectivity_ok=true
+else
+    echo "✗ No reliable internet connectivity - will create minimal application"
+    connectivity_ok=false
+fi
+
+# Test DNS resolution
+if [ "$connectivity_ok" = true ]; then
+    echo "Testing DNS resolution..."
+    if ! nslookup github.com; then
+        echo "WARNING: DNS resolution failed for github.com"
+        # Try setting alternative DNS
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+        if ! nslookup github.com; then
+            echo "ERROR: DNS resolution still failing - creating minimal application"
+            connectivity_ok=false
+        fi
+    fi
+fi
+
+# Export all variables for the setup script
+export DB_HOST DB_NAME DB_USERNAME DB_PASSWORD KMS_KEY_ID AWS_REGION
+export GITHUB_REPOSITORY_URL GITHUB_TOKEN 
+export ANTHROPIC_API_KEY OPENAI_API_KEY DEFAULT_LLM_PROVIDER
+export GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET ALLOWED_DOMAINS
+export DEBUG_MODE TEST_MODE
+
 # Try to download setup script from GitHub with retries
 download_setup_script() {
     local max_retries=5
@@ -272,12 +268,12 @@ download_setup_script() {
 }
 
 # Main execution
-if download_setup_script; then
+if [ "$connectivity_ok" = true ] && download_setup_script; then
     echo "Running full setup script..."
     chmod +x /tmp/setup_ec2.sh
     /tmp/setup_ec2.sh
 else
-    echo "GitHub download failed, creating minimal application..."
+    echo "Creating minimal application due to connectivity or download issues..."
     create_minimal_app
 fi
 
