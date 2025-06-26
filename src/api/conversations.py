@@ -17,7 +17,7 @@ import structlog
 
 from src.db.base import get_db_session
 from src.db.models import User, Conversation, Message
-from src.auth.mock import get_current_user
+from src.auth.google_oauth import get_current_user
 
 logger = structlog.get_logger()
 router = APIRouter()

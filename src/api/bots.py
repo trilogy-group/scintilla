@@ -18,7 +18,7 @@ import structlog
 from src.db.base import get_db_session
 from src.db.models import User, Bot, Source, UserBotAccess
 from src.db.mcp_credentials import get_bot_sources_with_credentials, store_source_credentials
-from src.auth.mock import get_current_user
+from src.auth.google_oauth import get_current_user
 from src.api.models import BotCreate, BotUpdate, BotResponse, BotWithSourcesResponse, BotSourceCreate, BotSourceUpdate, SourceResponse, UserBotAccessResponse
 
 logger = structlog.get_logger()

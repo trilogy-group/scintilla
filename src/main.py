@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 import structlog
 
 from src.config import settings, TEST_MODE
-from src.api import query, conversations, bots, sources, mcp_management
+from src.api import query, conversations, bots, sources, mcp_management, auth
 # Removed global_mcp import - using FastMCPAgent approach
 
 # Configure structured logging
@@ -69,6 +69,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(auth.router, prefix="/api", tags=["authentication"])
 app.include_router(query.router, prefix="/api", tags=["query"])
 app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 app.include_router(bots.router, prefix="/api", tags=["bots"])

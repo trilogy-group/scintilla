@@ -17,7 +17,7 @@ import structlog
 from src.api.models import QueryRequest, QueryResponse
 from src.api.query_handlers import QueryHandler
 from src.api.conversation_manager import ConversationManager
-from src.auth.mock import get_current_user
+from src.auth.google_oauth import get_current_user
 from src.db.base import get_db_session
 from src.db.models import User
 from src.config import TEST_MODE

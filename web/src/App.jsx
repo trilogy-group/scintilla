@@ -6,6 +6,7 @@ import CitationRenderer from './components/CitationRenderer'
 import { SourcesManager } from './components/SourcesManager'
 import { BotsManager } from './components/BotsManager'
 import LandingPage from './components/LandingPage'
+import GoogleAuth from './components/GoogleAuth'
 
 import './App.css'
 import api from './services/api'
@@ -19,8 +20,23 @@ function App() {
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const [searchSuggestions, setSearchSuggestions] = useState([])
   const [recentSearches, setRecentSearches] = useState(['xinet', 'scintilla architecture', 'bot configuration'])
+  const [currentUser, setCurrentUser] = useState(null)
+  const [authToken, setAuthToken] = useState(null)
   const searchInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+  
+  // Handle authentication state changes
+  const handleAuthChange = useCallback((user, token) => {
+    setCurrentUser(user)
+    setAuthToken(token)
+    
+    // Update API service with new token
+    if (token) {
+      api.setAuthToken(token)
+    } else {
+      api.clearAuthToken()
+    }
+  }, [])
   
   // Bot auto-complete functionality
   const {
@@ -416,9 +432,7 @@ function App() {
               <button className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
                 <Settings className="h-5 w-5" />
               </button>
-              <button className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
-                <User className="h-5 w-5" />
-              </button>
+              <GoogleAuth onAuthChange={handleAuthChange} />
             </div>
           </div>
         </div>

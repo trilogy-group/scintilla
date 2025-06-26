@@ -11,6 +11,33 @@ const BASE_URL = import.meta.env.VITE_API_URL ||
 class APIService {
   constructor() {
     this.baseURL = BASE_URL
+    this.authToken = null
+    
+    // Initialize with stored token if available
+    const storedToken = localStorage.getItem('scintilla_token')
+    if (storedToken) {
+      this.authToken = storedToken
+    }
+  }
+
+  setAuthToken(token) {
+    this.authToken = token
+  }
+
+  clearAuthToken() {
+    this.authToken = null
+  }
+
+  getAuthHeaders() {
+    const headers = {
+      'Content-Type': 'application/json'
+    }
+    
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`
+    }
+    
+    return headers
   }
 
   async request(endpoint, options = {}) {
@@ -18,7 +45,7 @@ class APIService {
     
     const config = {
       headers: {
-        'Content-Type': 'application/json',
+        ...this.getAuthHeaders(),
         ...options.headers
       },
       ...options
@@ -55,7 +82,7 @@ class APIService {
     const config = {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        ...this.getAuthHeaders(),
       },
       body: JSON.stringify(data)
     }
