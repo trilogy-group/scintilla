@@ -148,8 +148,9 @@ EOF
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-cd /opt/scintilla/app && sudo python3 -m pip install --upgrade pip
-cd /opt/scintilla/app && sudo python3 -m pip install -r requirements.txt
+cd /opt/scintilla/app
+# Skip pip upgrade to avoid RPM conflict, just install requirements
+sudo python3 -m pip install -r requirements.txt
 
 # Build frontend on the server
 echo "Building frontend..."
