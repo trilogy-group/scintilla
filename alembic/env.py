@@ -4,6 +4,7 @@ from sqlalchemy import pool
 from alembic import context
 import os
 import sys
+import ssl
 
 # Add the project root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,7 +34,26 @@ target_metadata = Base.metadata
 
 def get_database_url():
     """Get database URL from environment or config"""
-    return settings.database_url
+    # Ensure we use the sync postgresql:// URL for Alembic
+    url = settings.database_url
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql://")
+    
+    # Add SSL parameters directly to the URL for psycopg2
+    if "?" in url:
+        url += "&sslmode=require&sslcert=&sslkey=&sslrootcert="
+    else:
+        url += "?sslmode=require&sslcert=&sslkey=&sslrootcert="
+    
+    return url
+
+
+def create_ssl_context():
+    """Create SSL context for RDS connection with disabled certificate verification."""
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    return ssl_context
 
 
 def run_migrations_offline() -> None:
@@ -71,10 +91,11 @@ def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = get_database_url()
     
+    # Remove connect_args since SSL parameters are in the URL now
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
+        poolclass=pool.NullPool
     )
 
     with connectable.connect() as connection:

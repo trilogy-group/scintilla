@@ -5,10 +5,19 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
 from contextlib import contextmanager, asynccontextmanager
 import structlog
+import ssl
 
 from src.config import settings
 
 logger = structlog.get_logger()
+
+# Create SSL context for RDS (disables certificate verification)
+def create_ssl_context():
+    """Create SSL context for RDS connection with disabled certificate verification."""
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    return ssl_context
 
 # Create SQLAlchemy engine
 engine = create_engine(
@@ -21,13 +30,16 @@ engine = create_engine(
 # Create sessionmaker
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create async engine for FastAPI endpoints
+# Create async engine for FastAPI endpoints with SSL configuration
 async_database_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 async_engine = create_async_engine(
     async_database_url,
     pool_pre_ping=True,
     pool_recycle=300,
-    echo=settings.debug
+    echo=settings.debug,
+    connect_args={
+        'ssl': create_ssl_context()
+    }
 )
 
 # Create async sessionmaker

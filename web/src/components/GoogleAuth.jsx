@@ -91,6 +91,9 @@ const GoogleAuth = ({ onAuthChange, showOnlyLogin = false }) => {
       // Store token
       localStorage.setItem('scintilla_token', data.token)
       
+      // Set token in API service for subsequent requests
+      api.setAuthToken(data.token)
+      
       // Update user state
       setUser(data.user)
       onAuthChange?.(data.user, data.token)
