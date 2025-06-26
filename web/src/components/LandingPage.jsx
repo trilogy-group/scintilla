@@ -1,9 +1,9 @@
 import React, { useState } from 'react'
-import { Search, ArrowRight, MessageCircle, Settings, Bot } from 'lucide-react'
+import { Search, ArrowRight, MessageCircle, Settings, Bot, User } from 'lucide-react'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from '../hooks/useBotAutoComplete.jsx'
 import GoogleAuth from './GoogleAuth'
 
-const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false }) => {
+const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUser = null }) => {
   const [query, setQuery] = useState('')
 
   // Bot auto-complete functionality
@@ -105,8 +105,38 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false }) => {
               </nav>
             )}
           </div>
-          <div className="text-xs text-gray-500 dark:text-gray-400">
-            Powered by IgniteTech
+          
+          {/* Right side - User info or IgniteTech branding */}
+          <div className="flex items-center space-x-4">
+            {isAuthenticated && currentUser ? (
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-2">
+                  {currentUser.picture_url ? (
+                    <img 
+                      src={currentUser.picture_url} 
+                      alt={currentUser.name} 
+                      className="h-8 w-8 rounded-full"
+                    />
+                  ) : (
+                    <div className="h-8 w-8 rounded-full bg-gray-300 flex items-center justify-center">
+                      <User className="h-4 w-4 text-gray-600" />
+                    </div>
+                  )}
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {currentUser.name}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {currentUser.email}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                Powered by IgniteTech
+              </div>
+            )}
           </div>
         </div>
       </header>

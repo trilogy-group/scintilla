@@ -150,7 +150,7 @@ async def get_current_user_production(
     db: AsyncSession = Depends(get_db_session)
 ) -> User:
     """
-    Production authentication dependency using Google OAuth
+    Production authentication dependency using JWT tokens
     """
     if not credentials or not credentials.credentials:
         raise HTTPException(
@@ -160,14 +160,42 @@ async def get_current_user_production(
         )
     
     try:
-        # Verify Google token
-        token_info = await verify_google_token(credentials.credentials)
-        
-        # Create or update user
-        user = await create_or_update_user_from_google(db, token_info)
-        
-        logger.debug("Authenticated user", user_id=user.user_id, email=user.email)
-        return user
+        # First try to verify as JWT token (for frontend session tokens)
+        try:
+            jwt_payload = verify_jwt_token(credentials.credentials)
+            user_id = jwt_payload.get("user_id")
+            email = jwt_payload.get("email")
+            
+            if not user_id or not email:
+                raise AuthenticationError("Invalid JWT payload")
+            
+            # Get user from database
+            query = select(User).where(User.user_id == user_id)
+            result = await db.execute(query)
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                raise AuthenticationError("User not found")
+            
+            # Return detached user object to avoid session issues
+            detached_user = User(
+                user_id=user.user_id,
+                email=user.email,
+                name=user.name,
+                picture_url=user.picture_url,
+                is_admin=user.is_admin,
+                last_login=user.last_login
+            )
+            
+            logger.debug("Authenticated user via JWT", user_id=user.user_id, email=user.email)
+            return detached_user
+            
+        except AuthenticationError:
+            # If JWT verification fails, try Google OAuth token (for direct Google OAuth usage)
+            token_info = await verify_google_token(credentials.credentials)
+            user = await create_or_update_user_from_google(db, token_info)
+            logger.debug("Authenticated user via Google OAuth", user_id=user.user_id, email=user.email)
+            return user
         
     except AuthenticationError as e:
         logger.warning("Authentication failed", error=str(e))

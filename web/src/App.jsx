@@ -369,6 +369,7 @@ function App() {
       onSearch={handleLandingSearch} 
       onNavigate={handleLandingNavigation} 
       isAuthenticated={isAuthenticated}
+      currentUser={currentUser}
     />
   }
 

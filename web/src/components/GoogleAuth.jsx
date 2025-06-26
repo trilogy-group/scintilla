@@ -98,6 +98,9 @@ const GoogleAuth = ({ onAuthChange, showOnlyLogin = false }) => {
       setUser(data.user)
       onAuthChange?.(data.user, data.token)
       
+      // Validate token immediately to ensure state synchronization
+      await validateToken(data.token)
+      
     } catch (err) {
       console.warn('Login failed:', err.message)
       setError(err.message)
