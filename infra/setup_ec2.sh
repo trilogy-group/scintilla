@@ -239,7 +239,7 @@ Group=scintilla
 WorkingDirectory=/opt/scintilla/app
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/opt/scintilla/app
-ExecStart=/usr/bin/python3.11 src/main.py
+ExecStart=/usr/bin/python3 src/main.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -354,30 +354,8 @@ EOF
 sudo chmod +x /opt/scintilla/init_db.sh
 sudo chown scintilla:scintilla /opt/scintilla/init_db.sh
 
-# Create health check script
-echo "Creating health check script..."
-sudo cat > /opt/scintilla/scripts/health_check.sh << 'EOF'
-#!/bin/bash
-# Health check script for Scintilla
-
-# Check if service is running
-if ! systemctl is-active --quiet scintilla; then
-    echo "ERROR: Scintilla service is not running"
-    exit 1
-fi
-
-# Check if application is responding
-if ! curl -f -s http://localhost:8000/health > /dev/null; then
-    echo "ERROR: Scintilla health endpoint not responding"
-    exit 1
-fi
-
-echo "OK: Scintilla is healthy"
-exit 0
-EOF
-
+# Create scripts directory
 sudo mkdir -p /opt/scintilla/scripts
-sudo chmod +x /opt/scintilla/scripts/health_check.sh
 sudo chown -R scintilla:scintilla /opt/scintilla/scripts
 
 # Enable and start services
@@ -403,11 +381,16 @@ sudo systemctl enable scintilla
 # Final health check
 echo "Performing final health check..."
 sleep 30
-if /opt/scintilla/scripts/health_check.sh; then
+if systemctl is-active --quiet scintilla && curl -f -s http://localhost:8000/health > /dev/null; then
     echo "✅ Scintilla installation completed successfully!"
+    echo "🌐 Service available at http://localhost:8000"
 else
     echo "❌ Health check failed. Check logs for details."
-    sudo systemctl status scintilla
+    echo "Service status:"
+    sudo systemctl status scintilla --no-pager
+    echo ""
+    echo "Recent logs:"
+    sudo journalctl -u scintilla --no-pager -n 20
 fi
 
 echo "Full setup script completed at $(date)" 
