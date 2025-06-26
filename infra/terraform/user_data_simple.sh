@@ -171,21 +171,30 @@ debug_network() {
 test_http_connectivity() {
     echo "Testing HTTP connectivity to determine if internet is available..."
     
-    # Test multiple endpoints
-    local endpoints=(
-        "http://s3.amazonaws.com/"
-        "https://s3.amazonaws.com/"
-        "http://amazon.com/"
-        "https://api.github.com/"
-    )
+    # Test multiple endpoints without using array syntax that confuses Terraform
+    echo "Testing: http://s3.amazonaws.com/"
+    if curl -I --connect-timeout 10 --max-time 15 "http://s3.amazonaws.com/" 2>/dev/null | grep -q "HTTP"; then
+        echo "[OK] HTTP connectivity confirmed via http://s3.amazonaws.com/"
+        return 0
+    fi
     
-    for endpoint in "${endpoints[@]}"; do
-        echo "Testing: $endpoint"
-        if curl -I --connect-timeout 10 --max-time 15 "$endpoint" 2>/dev/null | grep -q "HTTP"; then
-            echo "[OK] HTTP connectivity confirmed via $endpoint"
-            return 0
-        fi
-    done
+    echo "Testing: https://s3.amazonaws.com/"
+    if curl -I --connect-timeout 10 --max-time 15 "https://s3.amazonaws.com/" 2>/dev/null | grep -q "HTTP"; then
+        echo "[OK] HTTP connectivity confirmed via https://s3.amazonaws.com/"
+        return 0
+    fi
+    
+    echo "Testing: http://amazon.com/"
+    if curl -I --connect-timeout 10 --max-time 15 "http://amazon.com/" 2>/dev/null | grep -q "HTTP"; then
+        echo "[OK] HTTP connectivity confirmed via http://amazon.com/"
+        return 0
+    fi
+    
+    echo "Testing: https://api.github.com/"
+    if curl -I --connect-timeout 10 --max-time 15 "https://api.github.com/" 2>/dev/null | grep -q "HTTP"; then
+        echo "[OK] HTTP connectivity confirmed via https://api.github.com/"
+        return 0
+    fi
     
     echo "[FAIL] No HTTP connectivity detected"
     return 1
