@@ -83,12 +83,9 @@ function App() {
     if (!authLoading && requireAuth(currentView)) {
       setShowLanding(true)
       setCurrentView('landing')
-    } else if (!authLoading && isAuthenticated && showLanding) {
-      // If user just authenticated and landing is showing, hide landing
-      setShowLanding(false)
-      setCurrentView('chat')
     }
-  }, [authLoading, isAuthenticated, currentView, requireAuth, showLanding])
+    // Remove the automatic redirect for authenticated users - let them see landing page
+  }, [authLoading, isAuthenticated, currentView, requireAuth])
 
   // Load previous conversations - but only when authenticated
   const loadConversations = useCallback(async () => {
@@ -164,9 +161,9 @@ function App() {
   }
 
   useEffect(() => {
-    // Only load data when authenticated
-    if (!isAuthenticated || authLoading) {
-      console.log('Skipping data load - authentication not ready')
+    // Only load data when authenticated and not on landing page
+    if (!isAuthenticated || authLoading || showLanding) {
+      console.log('Skipping data load - authentication not ready or on landing page')
       return
     }
     
@@ -177,7 +174,7 @@ function App() {
     } else if (currentView === 'bots') {
       loadBotsForAutoComplete() // Refresh bots when viewing bots section
     }
-  }, [currentView, loadBotsForAutoComplete, loadConversations, isAuthenticated, authLoading])
+  }, [currentView, loadBotsForAutoComplete, loadConversations, isAuthenticated, authLoading, showLanding])
 
   // Handle input change for auto-complete
   const handleInputChange = (e) => {
@@ -365,12 +362,8 @@ function App() {
     // Call the original auth change handler
     handleAuthChange(userData, token)
     
-    // If user just authenticated successfully, transition from landing to main app
-    if (userData && token && showLanding) {
-      console.log('User authenticated successfully, transitioning to main app')
-      setShowLanding(false)
-      setCurrentView('chat')
-    }
+    // Don't automatically redirect after authentication - let user stay on landing page
+    // They can navigate manually via the landing page interface
   }
 
   // Handle navigation from landing page
