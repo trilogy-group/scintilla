@@ -299,7 +299,7 @@ export const BotSuggestionsDropdown = ({
                 )}
               </div>
               <div className="text-xs text-gray-400 dark:text-gray-500">
-                {bot.sources?.length || 0} sources
+                {bot.source_ids?.length || 0} sources
               </div>
             </div>
           ))

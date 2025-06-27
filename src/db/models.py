@@ -28,9 +28,13 @@ class User(Base):
     
     # Relationships
     owned_sources = relationship("Source", back_populates="owner", cascade="all, delete-orphan")
-    created_bots = relationship("Bot", back_populates="created_by_admin", cascade="all, delete-orphan")
+    created_bots = relationship("Bot", back_populates="created_by_user", cascade="all, delete-orphan")
     bot_access = relationship("UserBotAccess", back_populates="user", cascade="all, delete-orphan")
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+    
+    # Source sharing relationships
+    granted_source_shares = relationship("SourceShare", foreign_keys="SourceShare.granted_by_user_id", back_populates="granted_by_user")
+    received_source_shares = relationship("SourceShare", foreign_keys="SourceShare.shared_with_user_id", back_populates="shared_with_user")
 
 
 class Source(Base):
@@ -65,6 +69,40 @@ class Source(Base):
     owner = relationship("User", back_populates="owned_sources")
     owner_bot = relationship("Bot", back_populates="owned_sources")
     tools = relationship("SourceTool", back_populates="source", cascade="all, delete-orphan")
+    
+    # New sharing and association relationships
+    shares = relationship("SourceShare", back_populates="source", cascade="all, delete-orphan")
+    bot_associations = relationship("BotSourceAssociation", back_populates="source", cascade="all, delete-orphan")
+
+
+class BotSourceAssociation(Base):
+    """Association between bots and sources with custom instructions"""
+    __tablename__ = "bot_source_associations"
+    
+    bot_id = Column(UUID(as_uuid=True), ForeignKey("bots.bot_id"), primary_key=True)
+    source_id = Column(UUID(as_uuid=True), ForeignKey("sources.source_id"), primary_key=True)
+    custom_instructions = Column(Text, nullable=True)  # Bot-specific instructions for this source
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # Relationships
+    bot = relationship("Bot", back_populates="source_associations")
+    source = relationship("Source", back_populates="bot_associations")
+
+
+class SourceShare(Base):
+    """Source sharing between users"""
+    __tablename__ = "source_shares"
+    
+    source_id = Column(UUID(as_uuid=True), ForeignKey("sources.source_id"), primary_key=True)
+    shared_with_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), primary_key=True)
+    granted_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    granted_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relationships
+    source = relationship("Source", back_populates="shares")
+    shared_with_user = relationship("User", foreign_keys=[shared_with_user_id], back_populates="received_source_shares")
+    granted_by_user = relationship("User", foreign_keys=[granted_by_user_id], back_populates="granted_source_shares")
 
 
 class Bot(Base):
@@ -76,8 +114,8 @@ class Bot(Base):
     description = Column(Text, nullable=True)
     source_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list)  # Keep for backward compatibility
     
-    # Admin configuration
-    created_by_admin_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    # User ownership and sharing configuration
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     is_public = Column(Boolean, default=False, nullable=False)
     allowed_user_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list)
     
@@ -85,9 +123,12 @@ class Bot(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
     # Relationships
-    created_by_admin = relationship("User", back_populates="created_bots")
+    created_by_user = relationship("User", back_populates="created_bots")
     user_access = relationship("UserBotAccess", back_populates="bot", cascade="all, delete-orphan")
     owned_sources = relationship("Source", back_populates="owner_bot", cascade="all, delete-orphan")
+    
+    # New source association relationship
+    source_associations = relationship("BotSourceAssociation", back_populates="bot", cascade="all, delete-orphan")
 
 
 class UserBotAccess(Base):

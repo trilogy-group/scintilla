@@ -68,7 +68,7 @@ async def trigger_global_refresh(
         "success": True,
         "message": f"Found {len(user_sources)} active sources for user",
         "user_sources_count": len(user_sources),
-        "note": "Use /sources/refresh-cache endpoint for actual tool cache refresh",
+        "note": "Use individual source refresh endpoints for tool cache refresh",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

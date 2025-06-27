@@ -1,7 +1,7 @@
 # Database models and migrations
 
 from src.db.base import Base, get_db, get_db_context, create_tables, drop_tables
-from src.db.models import User, Source, Bot, UserBotAccess, Conversation, Message, SourceTool
+from src.db.models import User, Source, Bot, UserBotAccess, Conversation, Message, SourceTool, BotSourceAssociation, SourceShare
 
 __all__ = [
     "Base",
@@ -15,5 +15,7 @@ __all__ = [
     "UserBotAccess",
     "Conversation",
     "Message",
-    "SourceTool"
+    "SourceTool",
+    "BotSourceAssociation",
+    "SourceShare"
 ] 

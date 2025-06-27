@@ -6,7 +6,7 @@ Handles CRUD operations for sources (individual MCP server connections owned by 
 
 import uuid
 from uuid import UUID
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 import structlog
 
 from src.db.base import get_db_session
-from src.db.models import User, Source, SourceTool, Bot, UserBotAccess
+from src.db.models import User, Source, SourceTool, Bot, UserBotAccess, BotSourceAssociation
 from src.auth.google_oauth import get_current_user
 from src.api.models import SourceCreate, SourceResponse, RefreshResponse, ErrorResponse
 from src.db.mcp_credentials import store_source_credentials, get_user_sources_with_credentials, MCPCredentialManager
@@ -42,6 +42,21 @@ class SourceWithStatusResponse(SourceResponse):
     last_connection_check: Optional[datetime]
     connection_error: Optional[str]
     tool_count: Optional[int]
+
+
+class BotUsingSource(BaseModel):
+    """Bot that is using a source"""
+    bot_id: uuid.UUID
+    bot_name: str
+    custom_instructions: Optional[str]
+
+
+class SourceDeletionWarning(BaseModel):
+    """Warning response when source is used by bots"""
+    warning: bool = True
+    message: str
+    source_name: str
+    bots_using_source: List[BotUsingSource]
 
 
 @router.post("", response_model=SourceResponse)
@@ -388,10 +403,11 @@ async def update_source(
 @router.delete("/{source_id}")
 async def delete_source(
     source_id: uuid.UUID,
+    force: bool = False,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
-):
-    """Delete a source owned by the current user"""
+) -> Union[SourceDeletionWarning, Dict[str, str]]:
+    """Delete a source owned by the current user with bot association warnings"""
     
     query = select(Source).where(
         Source.source_id == source_id,
@@ -411,7 +427,43 @@ async def delete_source(
     source_name = source.name
     owner_user_id = source.owner_user_id
     
-    # Soft delete
+    # Check if source is used by any bots
+    associations_query = select(BotSourceAssociation, Bot).join(
+        Bot, BotSourceAssociation.bot_id == Bot.bot_id
+    ).where(BotSourceAssociation.source_id == source_id)
+    
+    associations_result = await db.execute(associations_query)
+    associations = associations_result.fetchall()
+    
+    # If source is used by bots and user hasn't confirmed deletion
+    if associations and not force:
+        bots_using_source = []
+        for assoc, bot in associations:
+            bots_using_source.append(BotUsingSource(
+                bot_id=bot.bot_id,
+                bot_name=bot.name,
+                custom_instructions=assoc.custom_instructions
+            ))
+        
+        return SourceDeletionWarning(
+            message=f"Source '{source_name}' is currently used by {len(bots_using_source)} bot(s). Deleting it will remove it from these bots but keep the bots themselves.",
+            source_name=source_name,
+            bots_using_source=bots_using_source
+        )
+    
+    # If force=True or no associations, proceed with deletion
+    if associations:
+        # Remove bot-source associations
+        await db.execute(
+            delete(BotSourceAssociation).where(BotSourceAssociation.source_id == source_id)
+        )
+        logger.info(
+            "Removed source from bots",
+            source_id=source_id,
+            bot_count=len(associations)
+        )
+    
+    # Soft delete the source
     source.is_active = False
     source.updated_at = datetime.utcnow()
     
@@ -421,7 +473,8 @@ async def delete_source(
         "Source deleted",
         source_id=source_id,
         name=source_name,
-        owner_user_id=owner_user_id
+        owner_user_id=owner_user_id,
+        had_bot_associations=len(associations) > 0
     )
     
     return {"message": "Source deleted successfully"}
@@ -468,187 +521,10 @@ async def get_source_status(
     )
 
 
-@router.post("/{source_id}/test")
-async def test_source_connection(
-    source_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """Test connection to an MCP server using FastMCP."""
-    
-    # Get source and extract attributes early
-    source = await db.get(Source, source_id)
-    if not source:
-        raise HTTPException(status_code=404, detail="Source not found")
-    
-    # Extract attributes immediately
-    source_owner_user_id = source.owner_user_id
-    source_owner_bot_id = source.owner_bot_id
-    source_url = source.server_url
-    source_name = source.name
-    
-    # Check ownership - handle both user-owned and bot-owned sources
-    user_can_test = False
-    
-    if source_owner_user_id:
-        # User-owned source: check direct ownership
-        user_can_test = (source_owner_user_id == current_user.user_id)
-    elif source_owner_bot_id:
-        # Bot-owned source: check if user has access to the bot
-        # Get the bot and check access
-        bot_query = select(Bot).where(Bot.bot_id == source_owner_bot_id)
-        bot_result = await db.execute(bot_query)
-        bot = bot_result.scalar_one_or_none()
-        
-        if bot:
-            # Check if bot is public or user has explicit access
-            if bot.is_public:
-                user_can_test = True
-            else:
-                # Check explicit access
-                access_query = select(UserBotAccess).where(
-                    UserBotAccess.user_id == current_user.user_id,
-                    UserBotAccess.bot_id == source_owner_bot_id
-                )
-                access_result = await db.execute(access_query)
-                user_can_test = access_result.scalar_one_or_none() is not None
-    
-    if not user_can_test:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Test connection using FastMCP service with simplified interface
-    # Get auth configuration from database
-    from src.db.mcp_credentials import SimplifiedCredentialManager
-    auth_config = await SimplifiedCredentialManager.get_source_auth(db, source_id)
-    if not auth_config:
-        raise HTTPException(status_code=400, detail="Source authentication not configured")
-    
-    result = await FastMCPService.test_connection(
-        auth_config["server_url"], 
-        auth_config["auth_headers"]
-    )
-    
-    return {
-        "source_id": source_id,
-        "source_name": source_name,
-        "connection_test": result
-    }
 
 
-@router.post("/refresh-cache")
-async def refresh_tool_cache(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """
-    Refresh cached tools for all sources the user has access to (user-owned + accessible bot sources) using FastMCP
-    """
-    try:
-        from sqlalchemy import or_
-        
-        # Get user's directly owned sources
-        user_sources_query = select(Source).where(
-            Source.owner_user_id == user.user_id,
-            Source.is_active.is_(True)
-        )
-        user_sources_result = await db.execute(user_sources_query)
-        user_sources = user_sources_result.scalars().all()
-        
-        # Get bot sources user has access to
-        # First get user's accessible bot IDs
-        access_query = select(UserBotAccess.bot_id).where(
-            UserBotAccess.user_id == user.user_id
-        )
-        access_result = await db.execute(access_query)
-        accessible_bot_ids = [row[0] for row in access_result.fetchall()]
-        
-        # Get public bots + explicitly accessible bots
-        bot_conditions = [Bot.is_public.is_(True)]
-        if accessible_bot_ids:
-            bot_conditions.append(Bot.bot_id.in_(accessible_bot_ids))
-        
-        accessible_bots_query = select(Bot.bot_id).where(or_(*bot_conditions))
-        accessible_bots_result = await db.execute(accessible_bots_query)
-        all_accessible_bot_ids = [row[0] for row in accessible_bots_result.fetchall()]
-        
-        # Get sources owned by accessible bots
-        bot_sources = []
-        if all_accessible_bot_ids:
-            bot_sources_query = select(Source).where(
-                Source.owner_bot_id.in_(all_accessible_bot_ids),
-                Source.is_active.is_(True)
-            )
-            bot_sources_result = await db.execute(bot_sources_query)
-            bot_sources = bot_sources_result.scalars().all()
-        
-        # Combine all sources
-        all_sources = list(user_sources) + list(bot_sources)
-        
-        if not all_sources:
-            return {
-                "success": True,
-                "message": "No sources found for user",
-                "refreshed_sources": 0,
-                "total_tools": 0
-            }
-        
-        refreshed_count = 0
-        total_tools = 0
-        errors = []
-        
-        for source in all_sources:
-            # Extract source attributes early
-            source_id = source.source_id
-            source_name = source.name
-            source_url = source.server_url
-            
-            try:
-                # Use FastMCP service to discover and cache tools (simplified interface)
-                success, message, tool_count = await FastMCPService.discover_and_cache_tools(
-                    db=db,
-                    source_id=source_id
-                )
-                
-                if success:
-                    refreshed_count += 1
-                    total_tools += tool_count
-                    logger.info("Refreshed tools for source",
-                               source_id=source_id,
-                               source_name=source_name,
-                               tool_count=tool_count)
-                else:
-                    errors.append({
-                        "source_id": str(source_id),
-                        "source_name": source_name,
-                        "error": message
-                    })
-                    
-            except Exception as e:
-                errors.append({
-                    "source_id": str(source_id),
-                    "source_name": source_name,
-                    "error": str(e)
-                })
-        
-        return {
-            "success": True,
-            "message": f"Refreshed tools for {refreshed_count}/{len(all_sources)} sources (user-owned: {len(user_sources)}, bot sources: {len(bot_sources)})",
-            "refreshed_sources": refreshed_count,
-            "total_sources": len(all_sources),
-            "user_sources": len(user_sources),
-            "bot_sources": len(bot_sources),
-            "total_tools": total_tools,
-            "errors": errors if errors else None
-        }
-        
-    except Exception as e:
-        logger.error("Failed to refresh tool cache", user_id=user.user_id, error=str(e))
-        return {
-            "success": False,
-            "message": f"Failed to refresh tool cache: {str(e)}",
-            "refreshed_sources": 0,
-            "total_tools": 0
-        }
+
+
 
 
 @router.post("/{source_id}/refresh")

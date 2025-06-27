@@ -2,7 +2,7 @@
 Pydantic models for API requests and responses
 """
 
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Union
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
@@ -56,6 +56,7 @@ class StreamChunk(BaseModel):
     error: Optional[str] = Field(None, description="Error message")
 
 
+# Source configuration models
 class BotSourceCreate(BaseModel):
     """Request to create a new source for a bot"""
     name: str = Field(..., description="Display name for the source")
@@ -65,13 +66,34 @@ class BotSourceCreate(BaseModel):
     instructions: Optional[str] = None  # Instructions for how this source should be used
 
 
+class BotSourceReference(BaseModel):
+    """Reference to existing source with bot-specific instructions"""
+    source_id: UUID = Field(..., description="Existing source to reference")
+    custom_instructions: Optional[str] = Field(None, description="Bot-specific instructions for this source")
+
+
+class BotSourceConfig(BaseModel):
+    """Union type for bot source configuration"""
+    type: Literal["create", "reference"] = Field(..., description="Whether to create new or reference existing")
+    
+    # For creating new source (when type="create")
+    create_data: Optional[BotSourceCreate] = None
+    
+    # For referencing existing source (when type="reference")  
+    reference_data: Optional[BotSourceReference] = None
+
+
+# Enhanced bot models
 class BotCreate(BaseModel):
-    """Request to create a new bot with dedicated sources"""
+    """Request to create a new bot with flexible source configuration"""
     name: str = Field(..., description="Display name for the bot")
     description: Optional[str] = None
-    sources: List[BotSourceCreate] = Field(..., description="List of sources to create for this bot")
+    source_configs: List[BotSourceConfig] = Field(default=[], description="Mix of new sources and existing references")
     is_public: bool = Field(default=False, description="Whether the bot is publicly accessible")
-    allowed_user_ids: Optional[List[UUID]] = Field(default=None, description="User IDs allowed to access this bot (if not public)")
+    shared_with_users: Optional[List[UUID]] = Field(default=[], description="User IDs to share this bot with")
+    
+    # Legacy support for backward compatibility
+    sources: Optional[List[BotSourceCreate]] = Field(None, description="Legacy: List of sources to create for this bot")
 
 
 class BotSourceUpdate(BaseModel):
@@ -89,8 +111,11 @@ class BotUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     is_public: Optional[bool] = None
-    allowed_user_ids: Optional[List[UUID]] = None
-    sources: Optional[List[BotSourceUpdate]] = None  # Allow updating sources
+    shared_with_users: Optional[List[UUID]] = None
+    source_configs: Optional[List[BotSourceConfig]] = None  # New flexible source configuration
+    
+    # Legacy support
+    sources: Optional[List[BotSourceUpdate]] = None  # Allow updating sources (legacy)
 
 
 class BotResponse(BaseModel):
@@ -99,11 +124,42 @@ class BotResponse(BaseModel):
     name: str
     description: Optional[str]
     source_ids: List[UUID]  # Keep for backward compatibility
-    created_by_admin_id: UUID
+    created_by_user_id: UUID  # Changed from created_by_admin_id
     is_public: bool
-    allowed_user_ids: List[UUID]
+    shared_with_users: List[UUID]  # Changed from allowed_user_ids for clarity
     created_at: datetime
     updated_at: Optional[datetime]
+
+
+class BotSourceAssociationResponse(BaseModel):
+    """Bot-source association with custom instructions"""
+    source_id: UUID
+    source_name: str
+    custom_instructions: Optional[str]
+    source_type: str  # "owned", "shared", "bot_owned"
+    created_at: datetime
+    # Tool information
+    cached_tool_count: Optional[int] = None
+    tools_cache_status: Optional[str] = None
+    tools_last_cached_at: Optional[datetime] = None
+
+
+# Source sharing models
+class SourceShareCreate(BaseModel):
+    """Request to share a source with users"""
+    source_id: UUID = Field(..., description="Source to share")
+    shared_with_user_ids: List[UUID] = Field(..., description="User IDs to share with")
+
+
+class SourceShareResponse(BaseModel):
+    """Source sharing information"""
+    source_id: UUID
+    source_name: str
+    shared_with_user_id: UUID
+    shared_with_user_name: str
+    granted_by_user_id: UUID
+    granted_by_user_name: str
+    granted_at: datetime
 
 
 class ErrorResponse(BaseModel):
@@ -121,6 +177,7 @@ class SourceCreate(BaseModel):
     credentials: Dict[str, Any] = Field(..., description="Credential fields - can contain auth_headers object or other auth data")
     description: Optional[str] = None
     instructions: Optional[str] = None  # Instructions for bot usage
+    shared_with_users: Optional[List[UUID]] = Field(default=[], description="User IDs to share this source with")
 
 
 class SourceResponse(BaseModel):
@@ -132,6 +189,8 @@ class SourceResponse(BaseModel):
     server_url: str
     owner_user_id: Optional[UUID]
     owner_bot_id: Optional[UUID]
+    owner_type: Optional[str] = None  # "user", "bot", or None
+    is_shared_with_user: Optional[bool] = None  # Whether current user has access via sharing
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime]
@@ -145,9 +204,19 @@ class SourceResponse(BaseModel):
 
 class BotWithSourcesResponse(BotResponse):
     """Bot response with source details"""
-    sources: List[SourceResponse]  # Full source information
+    sources: List[SourceResponse]  # Full source information (legacy)
+    source_associations: List[BotSourceAssociationResponse]  # New association-based sources
     tool_count: Optional[int]
     user_has_access: bool
+
+
+class UserResponse(BaseModel):
+    """User information response"""
+    user_id: UUID
+    email: str
+    name: str
+    picture_url: Optional[str]
+    created_at: datetime
 
 
 class ConversationCreate(BaseModel):
@@ -193,7 +262,6 @@ class UserBotAccessResponse(BaseModel):
     user_id: UUID
     bot_id: UUID
     granted_at: datetime
-    granted_by_admin_id: UUID
 
 
 class HealthResponse(BaseModel):

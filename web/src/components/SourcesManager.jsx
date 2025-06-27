@@ -6,7 +6,6 @@ import {
   AlertCircle, 
   X, 
   RefreshCw, 
-  TestTube,
   CheckCircle,
   Clock,
   AlertTriangle,
@@ -22,8 +21,8 @@ export const SourcesManager = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [testingSource, setTestingSource] = useState(null)
-  const [refreshingCache, setRefreshingCache] = useState(false)
+
+
   const [refreshingSource, setRefreshingSource] = useState(null)
   const [expandedTools, setExpandedTools] = useState({})
 
@@ -78,21 +77,7 @@ export const SourcesManager = () => {
     }
   }
 
-  const handleRefreshCache = async () => {
-    try {
-      setRefreshingCache(true)
-      const result = await api.refreshCache()
-      if (result.success) {
-        alert(`Tool cache refreshed! Refreshed ${result.refreshed_sources}/${result.total_sources} sources with ${result.total_tools} total tools.`)
-      } else {
-        alert('Failed to refresh cache: ' + result.message)
-      }
-    } catch (err) {
-      alert('Failed to refresh cache: ' + err.message)
-    } finally {
-      setRefreshingCache(false)
-    }
-  }
+
 
   const resetForm = () => {
     setFormData({
@@ -141,33 +126,34 @@ export const SourcesManager = () => {
     }
   }
 
-  const handleDeleteSource = async (sourceId) => {
-    if (!confirm('Are you sure you want to delete this source?')) return
-    
+  const handleDeleteSource = async (sourceId, force = false) => {
     try {
-      await api.deleteSource(sourceId)
+      const result = await api.deleteSource(sourceId, force)
+      
+      // Check if result is a warning (has warning field)
+      if (result.warning) {
+        // Show detailed confirmation dialog
+        const botsList = result.bots_using_source
+          .map(bot => `• ${bot.bot_name}${bot.custom_instructions ? ' (with custom instructions)' : ''}`)
+          .join('\n')
+        
+        const confirmMessage = `${result.message}\n\nBots using this source:\n${botsList}\n\nDo you want to continue? The source will be removed from these bots but the bots will remain.`
+        
+        if (confirm(confirmMessage)) {
+          // User confirmed, delete with force=true
+          await handleDeleteSource(sourceId, true)
+        }
+        return
+      }
+      
+      // Success response
       await loadSources()
     } catch (err) {
       setError('Failed to delete source: ' + err.message)
     }
   }
 
-  const handleTestSource = async (sourceId) => {
-    try {
-      setTestingSource(sourceId)
-      const result = await api.testSourceConnection(sourceId)
-      const testResult = result.connection_test
-      if (testResult.success) {
-        alert(`Connection test successful! Found ${testResult.tool_count} tools in ${testResult.response_time_ms}ms.`)
-      } else {
-        alert('Connection test failed: ' + testResult.message)
-      }
-    } catch (err) {
-      alert('Connection test failed: ' + err.message)
-    } finally {
-      setTestingSource(null)
-    }
-  }
+
 
   const getToolStatusColor = (status) => {
     switch (status) {
@@ -250,24 +236,13 @@ export const SourcesManager = () => {
             Your individual MCP connections (separate from bot sources)
           </p>
         </div>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={handleRefreshCache}
-            disabled={refreshingCache}
-            className="flex items-center space-x-2 px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors disabled:opacity-50"
-            title="Refresh tool cache - this will force reload tools on next query"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshingCache ? 'animate-spin' : ''}`} />
-            <span className="text-sm">Refresh Cache</span>
-          </button>
-          <button
-            onClick={() => setShowCreateForm(true)}
-            className="flex items-center space-x-2 px-4 py-2 bg-scintilla-500 text-white rounded-lg hover:bg-scintilla-600 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add Source</span>
-          </button>
-        </div>
+        <button
+          onClick={() => setShowCreateForm(true)}
+          className="flex items-center space-x-2 px-4 py-2 bg-scintilla-500 text-white rounded-lg hover:bg-scintilla-600 transition-colors"
+        >
+          <Plus className="h-4 w-4" />
+          <span>Add Source</span>
+        </button>
       </div>
 
       {/* Error Banner */}
@@ -443,18 +418,7 @@ export const SourcesManager = () => {
                     <RefreshCw className="h-4 w-4" />
                   )}
                 </button>
-                <button
-                  onClick={() => handleTestSource(source.source_id)}
-                  disabled={testingSource === source.source_id}
-                  className="p-2 text-gray-400 hover:text-scintilla-500 transition-colors disabled:opacity-50"
-                  title="Test connection"
-                >
-                  {testingSource === source.source_id ? (
-                    <Loader className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <TestTube className="h-4 w-4" />
-                  )}
-                </button>
+
                 <button
                   onClick={() => handleDeleteSource(source.source_id)}
                   className="p-2 text-gray-400 hover:text-red-500 transition-colors"

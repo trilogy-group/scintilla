@@ -165,23 +165,14 @@ class APIService {
     })
   }
 
-  async deleteSource(sourceId) {
-    return this.request(`/api/sources/${sourceId}`, {
+  async deleteSource(sourceId, force = false) {
+    const url = `/api/sources/${sourceId}${force ? '?force=true' : ''}`
+    return this.request(url, {
       method: 'DELETE'
     })
   }
 
-  async testSourceConnection(sourceId) {
-    return this.request(`/api/sources/${sourceId}/test`, {
-      method: 'POST'
-    })
-  }
 
-  async refreshCache() {
-    return this.request('/api/sources/refresh-cache', {
-      method: 'POST'
-    })
-  }
 
   async refreshSourceTools(sourceId) {
     return this.request(`/api/sources/${sourceId}/refresh`, {
@@ -216,6 +207,14 @@ class APIService {
     return this.request(`/api/bots/${botId}`, {
       method: 'DELETE'
     })
+  }
+
+  async getAvailableSources() {
+    return this.request('/api/bots/available-sources')
+  }
+
+  async getUsers() {
+    return this.request('/api/users')
   }
 
   // Conversations endpoints
