@@ -60,6 +60,14 @@ async def query_endpoint(
                 user_message=request.message
             )
             
+            # Immediately send conversation_saved event to frontend so it knows the conversation ID
+            conversation_saved_chunk = {
+                "type": "conversation_saved",
+                "conversation_id": str(conversation.conversation_id),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            yield await format_sse_chunk(conversation_saved_chunk)
+            
             logger.info("Conversation ready, starting query processing")
             
             # Capture final chunk for saving
