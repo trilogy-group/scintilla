@@ -1,71 +1,24 @@
-# Scintilla
+# Scintilla - IgniteTech's Federated Search & Chat Tool
 
-IgniteTech's **intelligent federated search and chat platform**. Connect to multiple knowledge sources through MCP (Model Context Protocol) servers, ask questions across your entire knowledge base, and get AI-powered responses with proper citations.
+**Smart search across all your tools and knowledge bases** - Scintilla connects to MCP (Model Context Protocol) servers and uses AI to provide intelligent, cited answers from your connected sources.
 
-## 🚀 What is Scintilla?
+## 🌟 Key Features
 
-Scintilla is a modern search-focused platform that:
-- **🔍 Searches Multiple Sources**: Connect GitHub, Google Drive, Jira, documentation, and more
-- **🧠 AI-Powered Responses**: Uses Claude Sonnet and GPT-4o for intelligent answers  
-- **📚 Proper Citations**: All responses include source citations and links
-- **⚡ High Performance**: Server-level tool caching for sub-second response times
-- **🔐 Secure**: Google OAuth authentication with encrypted credential management
-- **🤖 Bot Management**: Create specialized bots with curated knowledge sources
+- **🔍 Federated Search**: Query across multiple MCP sources simultaneously
+- **🤖 AI-Powered Chat**: LangChain agents with Anthropic Claude and OpenAI GPT
+- **📊 Source Management**: Add, configure, and manage MCP tool sources
+- **🎯 Bot Configuration**: Create specialized bots with custom instructions and source access
+- **📝 Citation Tracking**: Every answer includes proper source citations
+- **⚡ High Performance**: Tool caching for faster responses
+- **🔐 Enterprise Security**: Google OAuth with domain restrictions and KMS encryption
+- **📱 Modern UI**: React-based interface with real-time streaming responses
 
-## 🏗️ Current Architecture
-
-### Backend (FastAPI + Python)
-- **FastAPI** application with structured logging
-- **FastMCPAgent**: High-performance agent with database caching and FastMCP integration
-- **PostgreSQL** database with tool caching and conversation history
-- **AWS KMS** encryption for secure credential storage
-- **Server-level tool caching** for 500x performance improvement
-
-### Frontend (React + Vite)
-- **Modern React SPA** with Tailwind CSS
-- **Real-time streaming** responses via Server-Sent Events
-- **Bot auto-complete** with intelligent suggestions
-- **Source and Bot management** interfaces
-- **Conversation history** with search functionality
-- **Landing page** with integrated search experience
-
-### Database Schema (Current)
-```
-users                    # Google OAuth users
-sources                  # Individual MCP server connections  
-  ├── tools_last_cached_at
-  ├── tools_cache_status
-  └── tools_cache_error
-bots                     # Collections of sources with specific purposes
-  ├── source_ids[]
-  ├── is_public
-  └── allowed_user_ids[]
-user_bot_access          # User permissions for bots
-mcp_credentials          # Encrypted API keys and tokens
-conversations            # Chat history
-messages                 # Individual chat messages with tool usage
-source_tools             # Cached tool metadata for performance
-```
-
-## ⚡ Performance Optimizations
-
-### Global Tool Caching (June 2025)
-- **Problem Solved**: Eliminated 25+ second tool discovery on every request
-- **Solution**: Server-level tool caching with lazy loading
-- **Result**: 500x performance improvement (25s → 50ms tool access)
-
-### Key Performance Features:
-- **Connection Pooling**: Reuse MCP connections across requests
-- **Background Operations**: Conversation saving doesn't block responses
-- **Smart Content Processing**: Intelligent truncation with context awareness
-- **Source Tool Caching**: Database-backed tool metadata cache
-
-## 🛠️ Tech Stack
+## 🏗️ Architecture Overview
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Backend** | FastAPI + Python 3.11+ | REST API with async support |
-| **Database** | PostgreSQL + SQLAlchemy | Data persistence with JSONB fields |
+| **Backend** | FastAPI + Python 3.11 | Async API with SSE streaming |
+| **Database** | PostgreSQL + SQLAlchemy | Data persistence with async support |
 | **LLM Integration** | LangChain + MCP Adapters | Tool orchestration and execution |
 | **LLM Providers** | Anthropic Claude + OpenAI GPT | AI response generation |
 | **Frontend** | React 19 + Vite + Tailwind | Modern SPA with real-time updates |
@@ -199,7 +152,7 @@ python tests/test_credential_system.py   # Security testing
 ### Performance Testing
 ```bash
 python scripts/performance_test.py       # Comprehensive performance tests
-python scripts/test_global_cache.py      # Cache performance validation
+python scripts/simple_test.py            # Basic functionality validation
 ```
 
 ## 📁 Project Structure
@@ -235,7 +188,7 @@ scintilla/
 │   │   │   ├── BotsManager.jsx # Bot management interface
 │   │   │   ├── SourcesManager.jsx # Source management
 │   │   │   ├── CitationRenderer.jsx # Citation display
-│   │   │   └── McpStatus.jsx   # MCP status monitoring
+│   │   │   └── GoogleAuth.jsx  # Authentication component
 │   │   ├── hooks/              # React hooks
 │   │   │   ├── useScintilla.js # Main application hook
 │   │   │   └── useBotAutoComplete.jsx # Bot suggestions
@@ -244,6 +197,12 @@ scintilla/
 │   └── package.json            # Frontend dependencies
 ├── tests/                      # Test suite
 ├── scripts/                    # Utility scripts
+│   ├── init_db.py              # Database initialization
+│   ├── performance_test.py     # Performance benchmarking
+│   ├── simple_test.py          # Basic functionality tests
+│   ├── diagnose_tools.py       # Tool debugging utilities
+│   ├── recache_tools.py        # Tool cache management
+│   └── check_dependencies.py   # Dependency verification
 ├── alembic/                    # Database migrations
 ├── infra/                      # Infrastructure as Code
 │   └── terraform/              # Terraform configurations for AWS EC2 deployment
@@ -282,20 +241,10 @@ npm run build   # Production build
 npm run lint    # ESLint checking
 ```
 
-## 📈 Performance Metrics
 
-| Metric | Before Optimization | After Optimization | Improvement |
-|--------|-------------------|-------------------|-------------|
-| Tool Loading | 25+ seconds | 50ms | **500x faster** |
-| First Response | 25+ seconds | ~1 second | **25x faster** |
-| Concurrent Users | Limited (sequential) | Unlimited (cached) | **∞x better** |
-| Memory Usage | High per-request | Low (shared cache) | **90% reduction** |
+## 🚀 AWS Deployment
 
-## 🚀 AWS Deployment Strategy
-
-### Production Architecture Overview
-
-Scintilla is designed for enterprise-scale deployment on AWS using modern cloud-native patterns:
+### Basic Production Architecture
 
 ```
 Internet Gateway
@@ -308,27 +257,23 @@ Auto Scaling Group (EC2 instances)
 ├── React Frontend (served by FastAPI)
 └── Health Check Endpoints
        ↓
-├── RDS PostgreSQL (Multi-AZ)
+├── RDS PostgreSQL
 ├── AWS KMS (credential encryption)
-└── CloudWatch (monitoring & logs)
+└── CloudWatch (basic monitoring)
 ```
 
 ### Infrastructure Components
 
-| Component | Service | Purpose | Configuration |
-|-----------|---------|---------|---------------|
-| **Compute** | EC2 Auto Scaling Group | Application hosting | t3.medium (2-10 instances) |
-| **Load Balancer** | Application Load Balancer | Traffic distribution | 4000s timeout for SSE |
-| **Database** | RDS PostgreSQL | Data persistence | db.t3.micro → db.r5.large |
-| **Caching** | In-memory (FastMCP) | Tool cache | Built-in application cache |
-| **Security** | AWS KMS | Credential encryption | Envelope encryption |
-| **Monitoring** | CloudWatch | Logs & metrics | Structured JSON logging |
-| **DNS** | Route 53 | Domain management | Health checks enabled |
-| **SSL/TLS** | ACM | Certificate management | Auto-renewal |
+| Component | Service | Configuration |
+|-----------|---------|---------------|
+| **Compute** | EC2 Auto Scaling Group | t3.micro to t3.medium |
+| **Load Balancer** | Application Load Balancer | 4000s timeout for SSE |
+| **Database** | RDS PostgreSQL | db.t3.micro to db.r5.large |
+| **Security** | AWS KMS | Envelope encryption |
+| **Monitoring** | CloudWatch | Basic logs & CPU alarms |
 
-### AWS Deployment (EC2 with Terraform)
+### Quick Deployment
 
-**Automated Deployment Script** (Recommended):
 ```bash
 # Copy and customize configuration
 cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
@@ -341,166 +286,28 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 ./infra/deploy.sh -e production
 ```
 
-**Manual Terraform Deployment** (For advanced users):
-```bash
-cd infra/terraform
-terraform init
-terraform plan -var-file="terraform.tfvars"
-terraform apply -var-file="terraform.tfvars"
-```
+### Environment Configurations
 
-### Environment-Specific Configurations
+| Environment | Instance Type | Database | Estimated Cost |
+|-------------|---------------|----------|----------------|
+| **Development** | t3.micro (1 instance) | db.t3.micro | ~$50-100/month |
+| **Staging** | t3.small (2 instances) | db.t3.small | ~$150-250/month |
+| **Production** | t3.medium+ (3-10 instances) | db.r5.large+ | ~$500-1000/month |
 
-#### Development Environment
-- **Instance Type**: t3.micro (single instance)
-- **Database**: db.t3.micro (single AZ)
-- **SSL**: Self-signed certificates
-- **Monitoring**: Basic CloudWatch
-- **Cost**: ~$50-100/month
+### Basic Security Features
 
-#### Staging Environment
-- **Instance Type**: t3.small (2 instances)
-- **Database**: db.t3.small (Multi-AZ)
-- **SSL**: ACM certificates
-- **Monitoring**: Enhanced CloudWatch
-- **Cost**: ~$150-250/month
-
-#### Production Environment
-- **Instance Type**: t3.medium+ (3-10 instances)
-- **Database**: db.r5.large+ (Multi-AZ)
-- **SSL**: ACM certificates with auto-renewal
-- **Monitoring**: Full observability stack
-- **Cost**: ~$500-2000/month (depending on scale)
-
-### Security Best Practices
-
-#### Network Security
 - **VPC**: Isolated network with public/private subnets
 - **Security Groups**: Least-privilege access rules
-- **NACLs**: Additional network-level protection
-- **VPC Flow Logs**: Network traffic monitoring
-
-#### Application Security
-- **IAM Roles**: Service-specific permissions
 - **KMS Encryption**: Envelope encryption for credentials
-- **Secrets Manager**: Secure credential rotation
-- **WAF**: Web application firewall protection
-
-#### Data Security
 - **RDS Encryption**: Encryption at rest and in transit
-- **Backup Encryption**: Encrypted automated backups
-- **Access Logging**: Comprehensive audit trails
-- **Data Classification**: Sensitive data identification
+- **Automated Backups**: 7-day retention configured
 
-### Monitoring & Observability
+### Basic Monitoring
 
-#### CloudWatch Integration
-```bash
-# Custom metrics for application performance
-aws logs create-log-group --log-group-name /aws/scintilla/application
-aws logs create-log-group --log-group-name /aws/scintilla/access
-
-# Set up alarms for critical metrics
-aws cloudwatch put-metric-alarm \
-  --alarm-name "Scintilla-HighErrorRate" \
-  --alarm-description "Error rate above threshold" \
-  --metric-name ErrorRate \
-  --namespace AWS/ApplicationELB \
-  --statistic Average \
-  --period 300 \
-  --threshold 5.0 \
-  --comparison-operator GreaterThanThreshold
-```
-
-#### Key Metrics to Monitor
-- **Application**: Response time, error rates, throughput
-- **Infrastructure**: CPU, memory, disk, network utilization
-- **Database**: Connection count, query performance, storage
-- **Business**: User engagement, query success rates, tool usage
-
-### Deployment Automation
-
-#### CI/CD Pipeline (GitHub Actions)
-```yaml
-# .github/workflows/deploy.yml
-name: Deploy to AWS
-on:
-  push:
-    branches: [main]
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Deploy to AWS
-        run: |
-          # Build and test
-          python -m pytest
-          npm run build
-          # Deploy infrastructure
-          terraform apply -auto-approve
-          # Deploy application
-          aws ecs update-service --force-new-deployment
-```
-
-#### Blue-Green Deployment
-```bash
-# Create new target group
-aws elbv2 create-target-group --name scintilla-green
-# Deploy new version to green environment
-# Health check validation
-# Switch traffic from blue to green
-aws elbv2 modify-listener --listener-arn $LISTENER_ARN --default-actions TargetGroupArn=$GREEN_TG
-```
-
-### Scaling Strategy
-
-#### Auto Scaling Configuration
-- **Target Tracking**: Scale based on CPU/memory utilization
-- **Predictive Scaling**: Scale ahead of predicted demand
-- **Custom Metrics**: Scale based on query volume or response time
-
-#### Database Scaling
-- **Read Replicas**: Distribute read traffic
-- **Connection Pooling**: Optimize database connections
-- **Query Optimization**: Regular performance tuning
-
-### Disaster Recovery
-
-#### Backup Strategy
-- **RDS Automated Backups**: 7-day retention
-- **Application Data**: S3 cross-region replication
-- **Infrastructure**: Versioned IaC in source control
-
-#### Recovery Procedures
-- **RTO**: 4 hours (Recovery Time Objective)
-- **RPO**: 1 hour (Recovery Point Objective)
-- **Multi-AZ**: Automatic failover for database
-- **Cross-Region**: Disaster recovery in secondary region
-
-### Cost Optimization
-
-#### Reserved Instances
-- **EC2**: 1-3 year commitments for predictable workloads
-- **RDS**: Reserved instances for database
-- **Savings Plans**: Flexible compute pricing
-
-#### Right-Sizing
-- **Instance Monitoring**: Regular review of resource utilization
-- **Auto Scaling**: Automatic adjustment to demand
-- **Spot Instances**: Cost savings for non-critical workloads
-
-### Compliance & Governance
-
-#### Regulatory Compliance
-- **SOC 2**: Security and availability controls
-- **GDPR**: Data protection and privacy
-- **HIPAA**: Healthcare data protection (if applicable)
-
-#### Governance Framework
-- **Tagging Strategy**: Consistent resource tagging
-- **Cost Allocation**: Department/project cost tracking
-- **Access Control**: Role-based access management
+- **CloudWatch Logs**: Application and access logs
+- **CPU Alarms**: Auto-scaling triggers
+- **Health Checks**: Load balancer health monitoring
+- **Application Metrics**: Response times and error rates
 
 ## 🔒 Security Features
 
@@ -519,11 +326,11 @@ aws elbv2 modify-listener --listener-arn $LISTENER_ARN --default-actions TargetG
 
 ## 📚 Additional Documentation
 
-- [`AWS_DEPLOYMENT.md`](AWS_DEPLOYMENT.md) - **Complete AWS deployment guide** with step-by-step instructions, architecture diagrams, and troubleshooting
-- [`DEPLOYMENT_CHECKLIST.md`](DEPLOYMENT_CHECKLIST.md) - **Production deployment checklist** with comprehensive verification steps
+- [`AWS_DEPLOYMENT.md`](AWS_DEPLOYMENT.md) - **Complete AWS deployment guide** with step-by-step instructions and troubleshooting
+- [`DEPLOYMENT_CHECKLIST.md`](DEPLOYMENT_CHECKLIST.md) - **Production deployment checklist** with verification steps
 - [`PERFORMANCE_IMPROVEMENTS.md`](PERFORMANCE_IMPROVEMENTS.md) - Detailed performance optimization documentation
-- [`BEST_PRACTICES.md`](BEST_PRACTICES.md) - Industry best practices guide covering vector databases, LLM integration, and deployment strategies
-- [`CLEANUP_LOG.md`](CLEANUP_LOG.md) - Comprehensive record of codebase cleanup activities
+- [`BEST_PRACTICES.md`](BEST_PRACTICES.md) - Development and deployment best practices
+- [`CLEANUP_LOG.md`](CLEANUP_LOG.md) - Record of codebase cleanup activities
 - [`tests/README.md`](tests/README.md) - Testing documentation and guides
 - [`web/README.md`](web/README.md) - Frontend-specific documentation
 

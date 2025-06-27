@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 import structlog
 
 from src.config import settings, TEST_MODE
@@ -93,12 +94,8 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
-    return {
-        "message": "Welcome to Scintilla",
-        "version": "0.1.0",
-        "test_mode": TEST_MODE
-    }
+    """Root endpoint - redirect to React app"""
+    return RedirectResponse(url="/static/index.html")
 
 
 # Serve static files (for development)
