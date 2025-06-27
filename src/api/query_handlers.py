@@ -194,9 +194,10 @@ Try asking about "What is Xinet?" or "Tell me about Scintilla" to see more detai
 class ProductionModeHandler:
     """Handles production mode queries with real MCP tools"""
     
-    def __init__(self, db: AsyncSession, user_id: uuid.UUID):
+    def __init__(self, db: AsyncSession, user_id: uuid.UUID, conversation_manager=None):
         self.db = db
         self.user_id = user_id
+        self.conversation_manager = conversation_manager
     
     async def handle_production_query(
         self, 
@@ -204,6 +205,14 @@ class ProductionModeHandler:
         conversation_id: uuid.UUID
     ) -> AsyncGenerator[dict, None]:
         """Handle production mode query with real MCP tools"""
+        
+        # Load conversation context if available
+        if self.conversation_manager:
+            conversation_context = await self.conversation_manager.load_conversation_history(
+                conversation_id=conversation_id
+            )
+        else:
+            conversation_context = []
         
         # Get bot source IDs from frontend-parsed bot mentions
         active_bot_ids = request.bot_ids or request.selected_bots or []
@@ -278,7 +287,7 @@ class ProductionModeHandler:
             "test_mode": False
         }
         
-        # Stream query results using fast agent
+        # Stream query results using fast agent with conversation history
         try:
             async for chunk in fast_agent.query(
                 message=request.message,
@@ -373,6 +382,6 @@ class QueryHandler:
     ) -> AsyncGenerator[dict, None]:
         """Handle production mode query"""
         
-        handler = ProductionModeHandler(self.db, self.user_id)
+        handler = ProductionModeHandler(self.db, self.user_id, self.conversation_manager)
         async for chunk in handler.handle_production_query(request, conversation_id):
             yield chunk 

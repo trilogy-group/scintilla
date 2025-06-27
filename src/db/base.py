@@ -32,14 +32,18 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Create async engine for FastAPI endpoints with SSL configuration
 async_database_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+
+# Only use SSL for remote databases (not localhost)
+connect_args = {}
+if "localhost" not in async_database_url and "127.0.0.1" not in async_database_url:
+    connect_args['ssl'] = create_ssl_context()
+
 async_engine = create_async_engine(
     async_database_url,
     pool_pre_ping=True,
     pool_recycle=300,
     echo=settings.debug,
-    connect_args={
-        'ssl': create_ssl_context()
-    }
+    connect_args=connect_args
 )
 
 # Create async sessionmaker

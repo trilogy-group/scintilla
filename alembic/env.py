@@ -38,13 +38,6 @@ def get_database_url():
     url = settings.database_url
     if url.startswith("postgresql+asyncpg://"):
         url = url.replace("postgresql+asyncpg://", "postgresql://")
-    
-    # Add SSL parameters directly to the URL for psycopg2
-    if "?" in url:
-        url += "&sslmode=require&sslcert=&sslkey=&sslrootcert="
-    else:
-        url += "?sslmode=require&sslcert=&sslkey=&sslrootcert="
-    
     return url
 
 
@@ -91,11 +84,22 @@ def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = get_database_url()
     
-    # Remove connect_args since SSL parameters are in the URL now
+    # Only use SSL for remote databases (not localhost)
+    connect_args = {}
+    database_url = get_database_url()
+    if "localhost" not in database_url and "127.0.0.1" not in database_url:
+        connect_args = {
+            'sslmode': 'prefer',
+            'sslcert': '',
+            'sslkey': '',
+            'sslrootcert': ''
+        }
+    
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
-        poolclass=pool.NullPool
+        poolclass=pool.NullPool,
+        connect_args=connect_args
     )
 
     with connectable.connect() as connection:

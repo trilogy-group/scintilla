@@ -7,6 +7,8 @@ alwaysApply: true
 
 Guidelines for Cursor AI when creating or editing code in this repository.  Everything here is a **preference**, not an iron‑clad rule.  Favour clarity and simplicity over rigid conventions.
 
+We are using brand new technology, so your knowledge might be limited. Please, search the internet whenever a question or request goes beyond your knowledge. Don't try to fix on your own.
+
 ## Project overview
 
 Scintilla is IgniteTech’s in‑house federated search & chat tool.  It signs users in with Google OAuth, gathers MCP tools from Hive workspaces (user + selected bots), lets LangChain choose which tools to call, and streams answers back to the browser.

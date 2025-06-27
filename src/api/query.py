@@ -50,6 +50,9 @@ async def query_endpoint(
             query_handler = QueryHandler(db, user.user_id)
             conversation_manager = ConversationManager(db)
             
+            # Inject conversation manager into query handler
+            query_handler.conversation_manager = conversation_manager
+            
             # Get or create conversation
             conversation = await conversation_manager.get_or_create_conversation(
                 user_id=user.user_id,

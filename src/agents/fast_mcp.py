@@ -73,8 +73,8 @@ class FastMCPService:
         Returns:
             Tuple of (final_url, fastmcp_config)
         """
-        if not auth_headers:
-            # No headers provided - use URL as-is (may have embedded auth)
+        if not auth_headers or len(auth_headers) == 0:
+            # No headers provided or empty dict - use URL as-is (may have embedded auth)
             return server_url, {}
         
         # Handle different auth methods for FastMCP
@@ -301,7 +301,8 @@ class FastMCPService:
                         "FastMCPService.call_tool called with official MCP client",
                         tool_name=tool_name,
                         arguments=arguments,
-                        server_url=server_url
+                        server_url=server_url,
+                        has_auth_headers=bool(auth_headers)
                     )
                 else:
                     logger.info(
@@ -311,19 +312,35 @@ class FastMCPService:
                         max_retries=max_retries
                     )
                 
-                # Prepare headers for official MCP client
+                # Prepare headers for official MCP client (extract auth from URL if needed)
                 headers = {}
-                if auth_headers:
-                    headers.update(auth_headers)
+                sse_url = server_url
                 
-                # Create SSE URL (most MCP servers support SSE)
-                sse_url = f"{server_url}/sse" if not server_url.endswith('/sse') else server_url
+                # Handle URL-embedded authentication (Hive style)
+                if "x-api-key=" in server_url:
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(server_url)
+                    query_params = parse_qs(parsed.query)
+                    if "x-api-key" in query_params:
+                        api_key = query_params["x-api-key"][0]
+                        headers["x-api-key"] = api_key
+                        # Remove auth from URL for clean SSE connection
+                        sse_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                        if not sse_url.endswith('/sse'):
+                            sse_url += '/sse'
+                    logger.info(f"Extracted Hive auth from URL: x-api-key present, clean URL: {sse_url}")
+                else:
+                    # Handle header-based authentication (Atlassian style)
+                    if auth_headers and len(auth_headers) > 0:
+                        headers.update(auth_headers)
+                    # Ensure URL ends with /sse
+                    if not sse_url.endswith('/sse'):
+                        sse_url += '/sse'
                 
                 # Add small delay between retries to avoid overwhelming server
                 if attempt > 0:
                     await asyncio.sleep(min(attempt * 0.5, 2.0))  # 0.5s, 1s, 2s max
                 
-                # Use official MCP client for better session management
                 async with sse_client(sse_url, headers=headers) as (transport_read, transport_write):
                     async with ClientSession(transport_read, transport_write) as session:
                         # Initialize the session
@@ -337,8 +354,8 @@ class FastMCPService:
                                 logger.info(
                                     "Available tools on server (official MCP client)",
                                     tool_count=len(tool_names),
+                                    has_search_emails='search_emails' in tool_names,
                                     has_jira_search='jira_search' in tool_names,
-                                    has_search='search' in tool_names,
                                     first_few_tools=tool_names[:5]
                                 )
                             except Exception as e:
