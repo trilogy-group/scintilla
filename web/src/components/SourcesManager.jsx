@@ -41,8 +41,8 @@ export const SourcesManager = () => {
   const AUTH_METHODS = {
     headers: {
       label: 'Header-based Authentication',
-      description: 'Use custom headers (Authorization, X-API-Key, etc.)',
-      placeholder: '{"Authorization": "Bearer your-token", "X-API-Key": "your-key"}'
+      description: 'Use custom headers (Authorization, Bearer tokens, etc.)',
+      placeholder: '{"Authorization": "Bearer your-token", "Custom-Header": "your-value"}'
     },
     url_embedded: {
       label: 'URL-embedded Authentication',
@@ -333,12 +333,15 @@ export const SourcesManager = () => {
                 value={formData.server_url}
                 onChange={(e) => setFormData({...formData, server_url: e.target.value})}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-                placeholder={AUTH_METHODS[formData.auth_method].placeholder}
+                placeholder={formData.auth_method === 'url_embedded' 
+                  ? 'https://mcp-server.example.com/sse?x-api-key=your-key'
+                  : 'https://mcp-server.example.com/sse'
+                }
               />
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 {formData.auth_method === 'url_embedded' 
-                  ? 'Include authentication parameters directly in the URL'
-                  : 'Base URL without authentication parameters'
+                  ? 'Complete MCP server URL with authentication parameters (x-api-key, tokens, etc.) included as query parameters'
+                  : 'MCP server base URL (e.g., https://mcp-server.example.com or https://mcp-server.example.com/sse) - authentication will be sent separately in headers'
                 }
               </p>
             </div>
@@ -358,7 +361,7 @@ export const SourcesManager = () => {
                   placeholder={AUTH_METHODS.headers.placeholder}
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  JSON object with authentication headers
+                  JSON object with authentication headers. Common examples: Authorization (Bearer/Basic), custom API headers, etc.
                 </p>
               </div>
             )}
