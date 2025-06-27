@@ -14,17 +14,23 @@ export const useBotAutoComplete = () => {
   // Load bots for auto-complete
   const loadBots = useCallback(async () => {
     try {
+      // Only load if we have an auth token
+      const token = localStorage.getItem('scintilla_token')
+      if (!token) {
+        console.log('Skipping bot load - no auth token')
+        return
+      }
+      
       const data = await api.getBots()
       setBots(data)
     } catch (error) {
       console.error('Failed to load bots:', error)
+      // Don't show error for authentication failures
+      if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
+        console.log('Authentication required for bots')
+      }
     }
   }, [])
-
-  // Load bots when hook is first used
-  useEffect(() => {
-    loadBots()
-  }, [loadBots])
 
   // Close suggestions when clicking outside (but not on the dropdown itself)
   useEffect(() => {

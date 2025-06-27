@@ -3,7 +3,7 @@ import { Search, ArrowRight, MessageCircle, Settings, Bot, User } from 'lucide-r
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from '../hooks/useBotAutoComplete.jsx'
 import GoogleAuth from './GoogleAuth'
 
-const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUser = null }) => {
+const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUser = null, onAuthChange }) => {
   const [query, setQuery] = useState('')
 
   // Bot auto-complete functionality
@@ -147,7 +147,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
           
           {/* Show login form if not authenticated */}
           {!isAuthenticated ? (
-            <GoogleAuth onAuthChange={() => {}} showOnlyLogin={true} />
+            <GoogleAuth onAuthChange={onAuthChange} showOnlyLogin={true} />
           ) : (
             <>
               {/* Authenticated content - Scintilla Logo */}

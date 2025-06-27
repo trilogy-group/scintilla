@@ -83,11 +83,20 @@ function App() {
     if (!authLoading && requireAuth(currentView)) {
       setShowLanding(true)
       setCurrentView('landing')
+    } else if (!authLoading && isAuthenticated && showLanding) {
+      // If user just authenticated and landing is showing, hide landing
+      setShowLanding(false)
+      setCurrentView('chat')
     }
-  }, [authLoading, isAuthenticated, currentView, requireAuth])
+  }, [authLoading, isAuthenticated, currentView, requireAuth, showLanding])
 
-  // Load previous conversations
+  // Load previous conversations - but only when authenticated
   const loadConversations = useCallback(async () => {
+    if (!isAuthenticated) {
+      console.log('Skipping conversation load - not authenticated')
+      return
+    }
+    
     try {
       console.log('Loading conversations...')
       const data = await api.getConversations()
@@ -95,8 +104,12 @@ function App() {
       setConversations(data)
     } catch (error) {
       console.error('Failed to load conversations:', error)
+      // Don't show error for authentication failures during initial load
+      if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
+        console.log('Authentication required for conversations')
+      }
     }
-  }, [])
+  }, [isAuthenticated])
 
   // Remove placeholder and refresh when real conversation is created
   const handleConversationCreated = useCallback((newConversationId) => {
@@ -151,6 +164,12 @@ function App() {
   }
 
   useEffect(() => {
+    // Only load data when authenticated
+    if (!isAuthenticated || authLoading) {
+      console.log('Skipping data load - authentication not ready')
+      return
+    }
+    
     if (currentView === 'chat') {
       console.log('Chat view activated, loading conversations')
       loadConversations()
@@ -158,7 +177,7 @@ function App() {
     } else if (currentView === 'bots') {
       loadBotsForAutoComplete() // Refresh bots when viewing bots section
     }
-  }, [currentView, loadBotsForAutoComplete, loadConversations])
+  }, [currentView, loadBotsForAutoComplete, loadConversations, isAuthenticated, authLoading])
 
   // Handle input change for auto-complete
   const handleInputChange = (e) => {
@@ -339,6 +358,21 @@ function App() {
     }
   }
 
+  // Enhanced auth change handler
+  const handleAuthChangeWithTransition = (userData, token) => {
+    console.log('Auth change detected:', { userData: !!userData, token: !!token })
+    
+    // Call the original auth change handler
+    handleAuthChange(userData, token)
+    
+    // If user just authenticated successfully, transition from landing to main app
+    if (userData && token && showLanding) {
+      console.log('User authenticated successfully, transitioning to main app')
+      setShowLanding(false)
+      setCurrentView('chat')
+    }
+  }
+
   // Handle navigation from landing page
   const handleLandingNavigation = (section) => {
     if (!isAuthenticated) {
@@ -370,6 +404,7 @@ function App() {
       onNavigate={handleLandingNavigation} 
       isAuthenticated={isAuthenticated}
       currentUser={currentUser}
+      onAuthChange={handleAuthChangeWithTransition}
     />
   }
 
@@ -464,7 +499,7 @@ function App() {
               <button className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
                 <Settings className="h-5 w-5" />
               </button>
-              <GoogleAuth onAuthChange={handleAuthChange} />
+              <GoogleAuth onAuthChange={handleAuthChangeWithTransition} />
             </div>
           </div>
         </div>
