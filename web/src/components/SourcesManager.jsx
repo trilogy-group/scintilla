@@ -10,7 +10,8 @@ import {
   AlertTriangle,
   Wrench,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  RefreshCw
 } from 'lucide-react'
 import { useScintilla } from '../hooks/useScintilla'
 import api from '../services/api'
