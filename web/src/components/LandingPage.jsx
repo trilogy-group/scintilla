@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Search, ArrowRight, MessageCircle, Settings, Bot, User } from 'lucide-react'
+import { Search, ArrowRight } from 'lucide-react'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from '../hooks/useBotAutoComplete.jsx'
 import GoogleAuth from './GoogleAuth'
 
@@ -55,88 +55,39 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     selectBotSuggestion(bot, query, setQuery)
   }
 
-  const handleNavigation = (section) => {
-    if (!isAuthenticated) {
-      return // Don't allow navigation if not authenticated
-    }
-    
-    if (onNavigate) {
-      onNavigate(section)
-    } else if (section === 'chat') {
-      // Fallback to search callback for chat
-      onSearch('')
-    }
-  }
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex flex-col">
-      {/* Enhanced Header with Navigation */}
-      <header className="px-8 py-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-8">
-            <img 
-              src="./img/scintilla_icon.svg" 
-              alt="Scintilla" 
-              className="h-8 w-8"
-            />
-            {isAuthenticated && (
-              <nav className="hidden md:flex items-center space-x-6">
-                <button
-                  onClick={() => handleNavigation('chat')}
-                  className="flex items-center space-x-2 text-gray-600 dark:text-gray-300 hover:text-scintilla-600 dark:hover:text-scintilla-400 transition-colors"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                  <span>Chat</span>
-                </button>
-                <button
-                  onClick={() => handleNavigation('sources')}
-                  className="flex items-center space-x-2 text-gray-600 dark:text-gray-300 hover:text-scintilla-600 dark:hover:text-scintilla-400 transition-colors"
-                >
-                  <Settings className="h-4 w-4" />
-                  <span>Sources</span>
-                </button>
-                <button
-                  onClick={() => handleNavigation('bots')}
-                  className="flex items-center space-x-2 text-gray-600 dark:text-gray-300 hover:text-scintilla-600 dark:hover:text-scintilla-400 transition-colors"
-                >
-                  <Bot className="h-4 w-4" />
-                  <span>Bots</span>
-                </button>
-              </nav>
-            )}
-          </div>
-          
-          {/* Right side - User info or IgniteTech branding */}
-          <div className="flex items-center space-x-4">
-            {isAuthenticated && currentUser ? (
-              <div className="flex items-center space-x-3">
-                <div className="flex items-center space-x-2">
-                  {currentUser.picture_url ? (
-                    <img 
-                      src={currentUser.picture_url} 
-                      alt={currentUser.name} 
-                      className="h-8 w-8 rounded-full"
-                    />
-                  ) : (
-                    <div className="h-8 w-8 rounded-full bg-gray-300 flex items-center justify-center">
-                      <User className="h-4 w-4 text-gray-600" />
-                    </div>
-                  )}
-                  <div className="text-right">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">
-                      {currentUser.name}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {currentUser.email}
-                    </p>
-                  </div>
+      {/* Clean, Minimal Header */}
+      <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
+        <div className="px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            {/* Scintilla Branding - Far Left (match main app) */}
+            <div className="flex items-center space-x-3">
+              <button 
+                className="flex items-center space-x-3 hover:opacity-75 transition-opacity"
+              >
+                <img 
+                  src="./img/scintilla_icon.svg" 
+                  alt="Scintilla" 
+                  className="h-8 w-8"
+                />
+                <div>
+                  <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    Scintilla
+                  </h1>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Powered by IgniteTech
+                  </p>
                 </div>
-              </div>
-            ) : (
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                Powered by IgniteTech
-              </div>
-            )}
+              </button>
+            </div>
+            
+            {/* Right side - Auth Component (match main app structure) */}
+            <div className="flex items-center space-x-4">
+              <GoogleAuth onAuthChange={onAuthChange} />
+            </div>
           </div>
         </div>
       </header>
@@ -145,9 +96,24 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
       <div className="flex-1 flex items-center justify-center px-8">
         <div className="w-full max-w-2xl text-center">
           
-          {/* Show login form if not authenticated */}
+          {/* Show login prompt if not authenticated */}
           {!isAuthenticated ? (
-            <GoogleAuth onAuthChange={onAuthChange} showOnlyLogin={true} />
+            <div className="mb-8">
+              <img 
+                src="./img/scintilla_logo.svg" 
+                alt="Scintilla" 
+                className="h-32 md:h-40 lg:h-48 mx-auto mb-6"
+              />
+              <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+                Welcome to Scintilla
+              </h2>
+              <p className="text-xl text-gray-600 dark:text-gray-300 mb-6">
+                Your intelligent search companion
+              </p>
+              <p className="text-base text-gray-500 dark:text-gray-400 mb-8">
+                Please sign in to access your knowledge base and start searching
+              </p>
+            </div>
           ) : (
             <>
               {/* Authenticated content - Scintilla Logo */}
@@ -216,7 +182,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                 </p>
                 <button
                   onClick={() => onSearch('')}
-                  className="inline-flex items-center space-x-2 px-8 py-3 bg-scintilla-500 text-white text-lg font-medium rounded-xl hover:bg-scintilla-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                  className="inline-flex items-center space-x-2 px-8 py-3 bg-scintilla-500 text-white text-lg font-medium rounded-xl hover:bg-scintilla-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-1 hover:scale-105"
                 >
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -225,10 +191,13 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                 </button>
               </div>
 
-              {/* Feature highlights */}
+              {/* Feature highlights - Now functional navigation cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
-                <div className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                  <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4">
+                <button
+                  onClick={() => onSearch('')}
+                  className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:border-scintilla-200 dark:hover:border-scintilla-700 transition-all duration-200 group transform hover:-translate-y-1 hover:scale-105"
+                >
+                  <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4 group-hover:bg-scintilla-200 dark:group-hover:bg-scintilla-800 transition-colors">
                     <Search className="h-6 w-6 text-scintilla-600 dark:text-scintilla-400" />
                   </div>
                   <h3 className="font-semibold text-gray-900 dark:text-white mb-2">
@@ -237,24 +206,16 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     Find answers across all your connected sources and knowledge base
                   </p>
-                </div>
-
-                <div className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                  <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4">
-                    <svg className="h-6 w-6 text-scintilla-600 dark:text-scintilla-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
+                  <div className="mt-3 text-xs text-scintilla-600 dark:text-scintilla-400 font-medium">
+                    Start Chat →
                   </div>
-                  <h3 className="font-semibold text-gray-900 dark:text-white mb-2">
-                    Conversational AI
-                  </h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Have natural conversations and get contextual follow-up answers
-                  </p>
-                </div>
+                </button>
 
-                <div className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                  <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4">
+                <button
+                  onClick={() => onNavigate ? onNavigate('sources') : onSearch('')}
+                  className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:border-scintilla-200 dark:hover:border-scintilla-700 transition-all duration-200 group transform hover:-translate-y-1 hover:scale-105"
+                >
+                  <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4 group-hover:bg-scintilla-200 dark:group-hover:bg-scintilla-800 transition-colors">
                     <svg className="h-6 w-6 text-scintilla-600 dark:text-scintilla-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
@@ -263,9 +224,32 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                     Connected Sources
                   </h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Access information from multiple integrated sources and bots
+                    Access information from multiple integrated sources and APIs
                   </p>
-                </div>
+                  <div className="mt-3 text-xs text-scintilla-600 dark:text-scintilla-400 font-medium">
+                    Manage Sources →
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => onNavigate ? onNavigate('bots') : onSearch('')}
+                  className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:border-scintilla-200 dark:hover:border-scintilla-700 transition-all duration-200 group transform hover:-translate-y-1 hover:scale-105"
+                >
+                  <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4 group-hover:bg-scintilla-200 dark:group-hover:bg-scintilla-800 transition-colors">
+                    <svg className="h-6 w-6 text-scintilla-600 dark:text-scintilla-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </div>
+                  <h3 className="font-semibold text-gray-900 dark:text-white mb-2">
+                    Smart Bots
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Create specialized AI assistants with curated knowledge sources
+                  </p>
+                  <div className="mt-3 text-xs text-scintilla-600 dark:text-scintilla-400 font-medium">
+                    Manage Bots →
+                  </div>
+                </button>
               </div>
             </>
           )}
@@ -273,7 +257,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
       </div>
 
       {/* Footer */}
-      <footer className="px-8 py-6 text-center">
+      <footer className="px-4 sm:px-6 lg:px-8 py-6 text-center border-t border-gray-200 dark:border-gray-700">
         <p className="text-xs text-gray-400 dark:text-gray-500">
           © 2025 IgniteTech. All rights reserved.
         </p>
