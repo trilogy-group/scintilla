@@ -23,7 +23,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from src.config import settings
 from src.db.models import Base
+from src.db.base import create_ssl_context  # Import the existing SSL function
 import structlog
+import ssl
 
 # Configure logging
 structlog.configure(
@@ -63,10 +65,24 @@ async def main():
     """Main execution function"""
     print("🔧 Scintilla Database Recreation Tool")
     
-    # Check database connection using async engine
+    # Create async engine with the same SSL configuration as base.py
     async_database_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
-    engine = create_async_engine(async_database_url)
     
+    # Use the same SSL configuration pattern as base.py
+    connect_args = {}
+    if "localhost" not in async_database_url and "127.0.0.1" not in async_database_url:
+        connect_args['ssl'] = create_ssl_context()
+        logger.info("🔐 Using SSL context for remote database connection")
+    
+    engine = create_async_engine(
+        async_database_url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        echo=settings.debug,
+        connect_args=connect_args
+    )
+    
+    # Test database connection first
     try:
         async with engine.connect() as conn:
             result = await conn.execute(text("SELECT version()"))
