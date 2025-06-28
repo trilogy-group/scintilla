@@ -1,0 +1,43 @@
+# Scintilla Local Agent Configuration Example
+# Copy this file to config.yaml and customize for your environment
+
+# Unique identifier for this agent instance
+# Each agent should have a unique ID
+agent_id: "local-agent-1"
+
+# Scintilla server URL
+# For local development: http://localhost:8000
+# For production: https://your-scintilla-server.com
+server_url: "http://localhost:8000"
+
+# Agent authentication token
+# Generate this from the Scintilla web UI at Settings > Agent Tokens
+# IMPORTANT: Keep this secret and never commit to version control
+agent_token: "scat_your_agent_token_here"
+
+# Agent capabilities - what this agent can do
+# Add or remove capabilities based on your MCP servers and tools
+capabilities:
+  - "docker_mcp_management"
+  - "confluence_operations"
+  - "jira_operations"
+  - "atlassian_integration"
+  - "local_tool_execution"
+  - "mcp_protocol_bridge"
+
+# Polling configuration
+# How often the agent checks for new tasks (in seconds)
+poll_interval: 2.0
+
+# MCP servers configuration file
+# This file defines which MCP servers to run and their configuration
+mcp_servers_config: "mcp_servers.yaml"
+
+# Docker timeout for operations (in seconds)
+# Increase if your MCP operations take longer
+docker_timeout: 30
+
+# Logging level
+# Options: DEBUG, INFO, WARNING, ERROR
+# Use DEBUG for development, INFO for production
+log_level: "INFO" 

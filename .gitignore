@@ -235,6 +235,10 @@ temp/
 tmp/
 scratch/
 
+# Local agent configuration (contains sensitive tokens)
+local-agent/config.yaml
+local-agent/mcp_servers.yaml
+
 # Documentation builds
 docs/_build/
 site/

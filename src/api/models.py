@@ -5,7 +5,7 @@ Pydantic models for API requests and responses
 from typing import Optional, List, Dict, Any, Literal, Union
 from pydantic import BaseModel, Field
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class QueryRequest(BaseModel):
@@ -275,4 +275,118 @@ class RefreshResponse(BaseModel):
     """Response for tool refresh operations"""
     message: str = Field(..., description="Status message")
     tools_count: int = Field(..., description="Number of tools refreshed")
-    timestamp: datetime = Field(..., description="Timestamp of refresh operation") 
+    timestamp: datetime = Field(..., description="Timestamp of refresh operation")
+
+
+# Non-streaming query response
+class QuerySyncResponse(BaseModel):
+    """Non-streaming query response"""
+    message_id: UUID
+    conversation_id: UUID
+    content: str
+    llm_provider: Optional[str]
+    llm_model: Optional[str]
+    tools_used: Optional[List[str]]
+    citations: Optional[List[Dict[str, Any]]]
+    processing_stats: Optional[Dict[str, Any]]
+    created_at: datetime
+
+
+# Local Agent models
+class AgentRegistration(BaseModel):
+    """Model for agent registration - lightweight, just capabilities"""
+    agent_id: str = Field(..., description="Unique identifier for the agent")
+    name: str = Field(..., description="Human-readable name for the agent")
+    capabilities: List[str] = Field(..., description="List of server/capability names this agent can handle")
+    version: Optional[str] = Field(default=None, description="Agent version")
+    user_id: Optional[str] = Field(default=None, description="User ID who registered this agent")
+    last_ping: Optional[str] = Field(default=None, description="Last ping timestamp")
+
+
+class AgentTask(BaseModel):
+    """Task to be executed by a local agent"""
+    task_id: str = Field(..., description="Unique task identifier")
+    tool_name: str = Field(..., description="Tool to execute")
+    arguments: Dict[str, Any] = Field(..., description="Tool arguments")
+    timeout_seconds: int = Field(default=60, description="Task timeout in seconds")
+    created_at: str = Field(..., description="Task creation timestamp")
+
+
+class AgentTaskRequest(BaseModel):
+    """Request to execute a task via local agents"""
+    tool_name: str = Field(..., description="Tool to execute")
+    arguments: Dict[str, Any] = Field(..., description="Tool arguments")
+    timeout_seconds: Optional[int] = Field(default=60, description="Task timeout in seconds")
+
+
+class AgentTaskResult(BaseModel):
+    """Result of a task executed by a local agent"""
+    task_id: str = Field(..., description="Task identifier")
+    agent_id: str = Field(..., description="Agent that executed the task")
+    success: bool = Field(..., description="Whether the task succeeded")
+    result: Optional[str] = Field(None, description="Task result data")
+    error: Optional[str] = Field(None, description="Error message if task failed")
+    execution_time_ms: Optional[int] = Field(None, description="Task execution time in milliseconds")
+    completed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="Task completion timestamp")
+
+
+class AgentPollResponse(BaseModel):
+    """Response to agent polling for work"""
+    has_work: bool = Field(..., description="Whether there is work available")
+    task: Optional[AgentTask] = Field(None, description="Task to execute if available")
+
+
+class AgentInfo(BaseModel):
+    """Information about a registered agent"""
+    agent_id: str
+    name: str
+    capabilities: List[str]
+    active_tasks: int
+    last_seen: Optional[str]
+
+
+class AgentStatusResponse(BaseModel):
+    """Status of the local agent system"""
+    registered_agents: int = Field(..., description="Number of registered agents")
+    pending_tasks: int = Field(..., description="Number of pending tasks")
+    active_tasks: int = Field(..., description="Number of active tasks")
+    agents: List[AgentInfo] = Field(..., description="List of registered agents")
+
+
+class ToolRefreshRequest(BaseModel):
+    """Request to refresh tools from a registered agent"""
+    agent_id: str = Field(..., description="Agent ID to refresh tools from")
+    capability: str = Field(..., description="Specific capability/server to refresh tools for")
+
+
+class ToolRefreshResponse(BaseModel):
+    """Response from tool refresh operation"""
+    success: bool
+    message: str
+    tools_discovered: int
+    capability: str
+    agent_id: str
+
+
+# Agent Token Management models
+class AgentTokenCreate(BaseModel):
+    """Request to create a new agent token"""
+    name: Optional[str] = Field(default=None, description="Optional name for the token")
+    expires_days: Optional[int] = Field(default=None, description="Optional expiration in days (default: no expiration)")
+
+
+class AgentTokenResponse(BaseModel):
+    """Response containing agent token information"""
+    token_id: UUID
+    name: Optional[str]
+    token_prefix: str  # First 8 characters for display
+    token: Optional[str] = Field(default=None, description="Full token (only shown once during creation)")
+    last_used_at: Optional[datetime]
+    expires_at: Optional[datetime]
+    is_active: bool
+    created_at: datetime
+
+
+class AgentTokenListResponse(BaseModel):
+    """List of user's agent tokens"""
+    tokens: List[AgentTokenResponse] 

@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse
 import structlog
 
 from src.config import settings, TEST_MODE
-from src.api import query, conversations, bots, sources, mcp_management, auth
+from src.api import query, conversations, bots, sources, mcp_management, auth, local_agents, agent_tokens
 # Removed global_mcp import - using FastMCPAgent approach
 
 # Configure structured logging
@@ -76,6 +76,8 @@ app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 app.include_router(bots.router, prefix="/api", tags=["bots"])
 app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(mcp_management.router, prefix="/api", tags=["mcp"])
+app.include_router(local_agents.router, prefix="/api", tags=["local-agents"])
+app.include_router(agent_tokens.router, prefix="/api", tags=["agent-tokens"])
 
 
 @app.get("/health")

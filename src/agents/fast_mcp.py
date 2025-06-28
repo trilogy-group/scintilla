@@ -191,7 +191,13 @@ class FastMCPService:
             )
             await db.commit()
             
-            # Prepare URL and auth
+            # Check if this is a local:// URL scheme that should route to local agents
+            if server_url.startswith(("local://", "stdio://", "agent://")):
+                return await FastMCPService._discover_tools_from_local_agent(
+                    db, source_id, server_url
+                )
+            
+            # Prepare URL and auth for remote MCP servers
             final_server_url, fastmcp_config = FastMCPService._prepare_auth_for_fastmcp(
                 server_url, auth_headers
             )
@@ -254,6 +260,69 @@ class FastMCPService:
             return False, error_msg, 0
     
     @staticmethod
+    async def _discover_tools_from_local_agent(
+        db: AsyncSession,
+        source_id: uuid.UUID,
+        server_url: str
+    ) -> Tuple[bool, str, int]:
+        """
+        Check if tools are already cached for this local source.
+        
+        Local agent tools should be refreshed using the /agents/refresh-tools endpoint,
+        not discovered on-demand. This method just checks if tools are cached.
+        
+        Args:
+            db: Database session
+            source_id: Source ID to check for cached tools
+            server_url: Local URL scheme (e.g., local://khoros-atlassian)
+            
+        Returns:
+            Tuple of (success, message, tool_count)
+        """
+        try:
+            # Check if we already have cached tools for this source
+            from sqlalchemy import select, func
+            result = await db.execute(
+                select(func.count(SourceTool.tool_name))
+                .where(SourceTool.source_id == source_id)
+                .where(SourceTool.is_active == True)
+            )
+            tool_count = result.scalar_one()
+            
+            if tool_count > 0:
+                logger.info(
+                    "Found cached tools for local source",
+                    source_id=source_id,
+                    server_url=server_url,
+                    tool_count=tool_count
+                )
+                return True, f"Using {tool_count} cached tools", tool_count
+            
+            # No cached tools found - tools need to be refreshed first
+            error_msg = (
+                f"No cached tools found for {server_url}. "
+                f"Please use POST /api/agents/refresh-tools with appropriate agent_id and capability "
+                f"to discover and cache tools for this local source."
+            )
+            
+            await FastMCPService._update_cache_error(db, source_id, error_msg)
+            
+            logger.warning(
+                "No cached tools for local source",
+                source_id=source_id,
+                server_url=server_url,
+                message=error_msg
+            )
+            
+            return False, error_msg, 0
+            
+        except Exception as e:
+            error_msg = f"Local agent tool check failed: {str(e)}"
+            await FastMCPService._update_cache_error(db, source_id, error_msg)
+            logger.error("Local agent tool check error", error=str(e), source_id=source_id)
+            return False, error_msg, 0
+    
+    @staticmethod
     async def _update_cache_error(db: AsyncSession, source_id: uuid.UUID, error_msg: str):
         """Update source with caching error"""
         try:
@@ -280,9 +349,10 @@ class FastMCPService:
     ) -> Dict[str, Any]:
         """
         Call a specific tool on an MCP server using official MCP client with retry logic
+        or route to local agents for local:// URLs
         
         Args:
-            server_url: MCP server URL
+            server_url: MCP server URL or local:// scheme
             auth_headers: Optional authentication headers
             tool_name: Name of the tool to call
             arguments: Tool arguments
@@ -291,6 +361,14 @@ class FastMCPService:
         Returns:
             Tool result dictionary
         """
+        
+        # Check if this is a local:// URL scheme that should route to local agents
+        if server_url.startswith(("local://", "stdio://", "agent://")):
+            return await FastMCPService._call_tool_via_local_agent(
+                server_url, tool_name, arguments
+            )
+        
+        # Handle remote MCP servers with retry logic
         last_error = None
         
         for attempt in range(max_retries + 1):
@@ -445,6 +523,60 @@ class FastMCPService:
             "tool_name": tool_name,
             "arguments": arguments
         }
+    
+    @staticmethod
+    async def _call_tool_via_local_agent(
+        server_url: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        timeout_seconds: int = 60
+    ) -> Dict[str, Any]:
+        """
+        Execute a tool via local agents using the local agent API
+        
+        Args:
+            server_url: Local URL scheme (e.g., local://khoros-atlassian)
+            tool_name: Name of the tool to call
+            arguments: Tool arguments
+            timeout_seconds: Timeout for tool execution
+            
+        Returns:
+            Tool result dictionary
+        """
+        try:
+            # Import here to avoid circular imports
+            from src.api.local_agents import execute_local_tool
+            
+            logger.info(
+                "🏠 Routing tool call to local agent",
+                tool_name=tool_name,
+                arguments=arguments,
+                server_url=server_url
+            )
+            
+            # Execute via local agent system
+            result = await execute_local_tool(tool_name, arguments, timeout_seconds)
+            
+            logger.info(
+                "🏠 Local agent tool call completed",
+                tool_name=tool_name,
+                success=result.get("success", False)
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "🏠 Local agent tool call failed",
+                tool_name=tool_name,
+                error=str(e)
+            )
+            return {
+                "success": False,
+                "error": f"Local agent execution failed: {str(e)}",
+                "tool_name": tool_name,
+                "arguments": arguments
+            }
 
 
 class FastMCPToolManager:
@@ -655,7 +787,12 @@ class FastMCPToolManager:
             description=tool_description,
             func=tool_func,
             coroutine=tool_func,  # For async execution
-            args_schema=args_schema  # Properly handles empty schemas
+            args_schema=args_schema,  # Properly handles empty schemas
+            metadata={
+                'source_id': server_config.source_id,
+                'source_name': server_config.name,
+                'server_url': server_config.server_url
+            }
         )
     
     def get_tools(self) -> List[BaseTool]:

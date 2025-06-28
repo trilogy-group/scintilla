@@ -261,6 +261,30 @@ class APIService {
     })
   }
 
+  // Agent Token endpoints
+  async getAgentTokens() {
+    return this.request('/api/agent-tokens')
+  }
+
+  async createAgentToken(tokenData) {
+    return this.request('/api/agent-tokens', {
+      method: 'POST',
+      body: tokenData
+    })
+  }
+
+  async deleteAgentToken(tokenId) {
+    return this.request(`/api/agent-tokens/${tokenId}`, {
+      method: 'DELETE'
+    })
+  }
+
+  async deleteAllAgentTokens() {
+    return this.request('/api/agent-tokens', {
+      method: 'DELETE'
+    })
+  }
+
   // Health check
   async healthCheck() {
     return this.request('/health')

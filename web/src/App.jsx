@@ -8,6 +8,7 @@ import { SourcesManager } from './components/SourcesManager'
 import { BotsManager } from './components/BotsManager'
 import LandingPage from './components/LandingPage'
 import GoogleAuth from './components/GoogleAuth'
+import { AgentTokensManager } from './components/AgentTokensManager'
 
 import './App.css'
 import api from './services/api'
@@ -16,6 +17,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [currentView, setCurrentView] = useState('chat') // 'chat', 'sources', 'bots'
   const [showLanding, setShowLanding] = useState(true) // Show landing page initially
+  const [showSettings, setShowSettings] = useState(false) // Settings modal
   const [conversations, setConversations] = useState([])
   const [conversationSearch, setConversationSearch] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
@@ -489,7 +491,11 @@ function App() {
                   </button>
                 )}
               </div>
-              <button className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
+              <button 
+                onClick={() => setShowSettings(true)}
+                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                title="Settings"
+              >
                 <Settings className="h-5 w-5" />
               </button>
               <GoogleAuth onAuthChange={handleAuthChangeWithTransition} />
@@ -1026,6 +1032,32 @@ function App() {
           </div>
         ) : null}
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center">
+                <Settings className="h-6 w-6 mr-2 text-scintilla-600" />
+                Settings
+              </h2>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+              <AgentTokensManager />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

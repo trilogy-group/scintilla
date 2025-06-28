@@ -4,63 +4,15 @@ import remarkGfm from 'remark-gfm'
 import { ExternalLink } from 'lucide-react'
 
 /**
- * Component for rendering clickable citation links [1], [2], etc.
+ * Component for rendering citation numbers [1], [2], etc.
  */
-export const CitationLink = ({ number, onClick, sources = [], content = "", className = "" }) => {
-  const handleClick = (e) => {
-    e.preventDefault()
-    
-    // First try to find URL from sources array
-    const source = sources[number - 1] // Convert 1-based to 0-based index
-    
-    if (source && source.url && source.url !== "https://drive.google.com" && source.url !== "") {
-      // Open the source URL in a new tab
-      window.open(source.url, '_blank', 'noopener,noreferrer')
-      return
-    }
-    
-    // If no URL in sources, try to extract from content
-    if (content) {
-      // Look for the citation in the content and extract URL
-      const citationPattern = new RegExp(`\\[${number}\\]\\s*\\[([^\\]]+)\\]\\(([^)]+)\\)`, 'g')
-      const match = citationPattern.exec(content)
-      
-      if (match && match[2]) {
-        window.open(match[2], '_blank', 'noopener,noreferrer')
-        return
-      }
-      
-      // Alternative pattern: **Sources:** section
-      const sourcesPattern = new RegExp(`\\[${number}\\]\\s*\\[([^\\]]+)\\]\\(([^)]+)\\)`, 'gm')
-      const sourcesMatch = sourcesPattern.exec(content)
-      
-      if (sourcesMatch && sourcesMatch[2]) {
-        window.open(sourcesMatch[2], '_blank', 'noopener,noreferrer')
-        return
-      }
-    }
-    
-    // Fallback to scroll behavior if no URL found
-    onClick?.(number)
-  }
-
-  // Check if we have a URL available
-  const source = sources[number - 1]
-  const hasUrl = (source && source.url && source.url !== "https://drive.google.com" && source.url !== "") || 
-                 (content && content.includes(`[${number}]`) && content.includes(']('))
-  
+export const CitationLink = ({ number, className = "" }) => {
   return (
-    <button
-      onClick={handleClick}
-      className={`citation-link inline-flex items-center text-xs ${
-        hasUrl 
-          ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 hover:text-blue-800 cursor-pointer' 
-          : 'bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer'
-      } px-1 py-0.5 rounded transition-colors ${className}`}
-      title={hasUrl ? `Open source ${number}` : `Jump to source ${number}`}
+    <span
+      className={`citation-link inline-flex items-center text-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 px-1 py-0.5 rounded ${className}`}
     >
       [{number}]
-    </button>
+    </span>
   )
 }
 
@@ -218,101 +170,123 @@ const SourceTypeIcon = ({ type }) => {
 }
 
 /**
+ * Universal function to process any text content and replace citations with clickable links
+ */
+const processCitations = (content, sources, onCitationClick) => {
+  if (typeof content !== 'string') {
+    return content
+  }
+
+  const citationRegex = /\[(\d+)\]/g
+  const parts = []
+  let lastIndex = 0
+  let match
+
+  while ((match = citationRegex.exec(content)) !== null) {
+    // Add text before citation
+    if (match.index > lastIndex) {
+      parts.push(content.slice(lastIndex, match.index))
+    }
+
+    // Add citation link
+    const citationNumber = parseInt(match[1])
+    parts.push(
+      <CitationLink
+        key={`citation-${citationNumber}-${match.index}-${Math.random()}`}
+        number={citationNumber}
+        className="mx-0.5"
+      />
+    )
+
+    lastIndex = match.index + match[0].length
+  }
+
+  // Add remaining text
+  if (lastIndex < content.length) {
+    parts.push(content.slice(lastIndex))
+  }
+
+  return parts.length > 1 ? parts : content
+}
+
+/**
+ * Process children to handle citations in any context
+ */
+const processChildrenWithCitations = (children, sources, onCitationClick) => {
+  return React.Children.map(children, (child, index) => {
+    if (typeof child === 'string') {
+      return processCitations(child, sources, onCitationClick)
+    }
+    return child
+  })
+}
+
+/**
  * Custom components for rendering Markdown with citation support
  */
 const createMarkdownComponents = (sources, content, onCitationClick) => ({
   // Custom renderer for paragraphs to handle citations
   p: ({ children }) => {
-    // Check if any children contain citation patterns
-    const hasCitations = React.Children.toArray(children).some(child => {
-      if (typeof child === 'string') {
-        return /\[(\d+)\]/.test(child)
-      }
-      return false
-    })
-
-    if (hasCitations) {
-      // Process children to replace citation patterns
-      const processedChildren = React.Children.map(children, (child, index) => {
-        if (typeof child === 'string') {
-          const citationRegex = /\[(\d+)\]/g
-          const parts = []
-          let lastIndex = 0
-          let match
-
-          while ((match = citationRegex.exec(child)) !== null) {
-            // Add text before citation
-            if (match.index > lastIndex) {
-              parts.push(child.slice(lastIndex, match.index))
-            }
-
-            // Add citation link
-            const citationNumber = parseInt(match[1])
-            parts.push(
-              <CitationLink
-                key={`citation-${citationNumber}-${index}-${match.index}`}
-                number={citationNumber}
-                onClick={onCitationClick}
-                sources={sources}
-                content={content}
-                className="mx-0.5"
-              />
-            )
-
-            lastIndex = match.index + match[0].length
-          }
-
-          // Add remaining text
-          if (lastIndex < child.length) {
-            parts.push(child.slice(lastIndex))
-          }
-
-          return parts.length > 1 ? parts : child
-        }
-        return child
-      })
-
-      return (
-        <p className="mb-3 text-gray-700 dark:text-gray-300 leading-relaxed">
-          {processedChildren}
-        </p>
-      )
-    }
-
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
     return (
       <p className="mb-3 text-gray-700 dark:text-gray-300 leading-relaxed">
-        {children}
+        {processedChildren}
       </p>
+    )
+  },
+
+  // Process citations in list items
+  li: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return <li className="ml-2">{processedChildren}</li>
+  },
+
+  // Process citations in headers
+  h1: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return (
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-4 mt-6">{processedChildren}</h1>
+    )
+  },
+  h2: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return (
+      <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3 mt-5">{processedChildren}</h2>
+    )
+  },
+  h3: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return (
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2 mt-4">{processedChildren}</h3>
+    )
+  },
+  h4: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return (
+      <h4 className="text-base font-semibold text-gray-900 dark:text-white mb-2 mt-3">{processedChildren}</h4>
+    )
+  },
+
+  // Process citations in emphasis and strong text
+  strong: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return (
+      <strong className="font-semibold text-gray-900 dark:text-white">{processedChildren}</strong>
+    )
+  },
+  em: ({ children }) => {
+    const processedChildren = processChildrenWithCitations(children, sources, onCitationClick)
+    return (
+      <em className="italic text-gray-700 dark:text-gray-300">{processedChildren}</em>
     )
   },
   
   // Basic styling for common Markdown elements
-  h1: ({ children }) => (
-    <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-4 mt-6">{children}</h1>
-  ),
-  h2: ({ children }) => (
-    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-3 mt-5">{children}</h2>
-  ),
-  h3: ({ children }) => (
-    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2 mt-4">{children}</h3>
-  ),
-  h4: ({ children }) => (
-    <h4 className="text-base font-semibold text-gray-900 dark:text-white mb-2 mt-3">{children}</h4>
-  ),
   ul: ({ children }) => (
     <ul className="list-disc list-inside mb-3 text-gray-700 dark:text-gray-300 space-y-1">{children}</ul>
   ),
   ol: ({ children }) => (
     <ol className="list-decimal list-inside mb-3 text-gray-700 dark:text-gray-300 space-y-1">{children}</ol>
-  ),
-  li: ({ children }) => (
-    <li className="ml-2">{children}</li>
-  ),
-  strong: ({ children }) => (
-    <strong className="font-semibold text-gray-900 dark:text-white">{children}</strong>
-  ),
-  em: ({ children }) => (
-    <em className="italic text-gray-700 dark:text-gray-300">{children}</em>
   ),
   code: ({ children, inline }) => (
     inline ? (
@@ -360,11 +334,15 @@ export const CitationRenderer = ({ content, sources = [], onCitationClick }) => 
     .trim()
 
   // Fallback to simple text rendering if Markdown fails
-  const renderFallback = () => (
-    <div className="content whitespace-pre-wrap text-gray-700 dark:text-gray-300">
-      {cleanedContent}
-    </div>
-  )
+  const renderFallback = () => {
+    // Process citations in fallback content too
+    const processedFallback = processCitations(cleanedContent, sources, handleCitationClick)
+    return (
+      <div className="content whitespace-pre-wrap text-gray-700 dark:text-gray-300">
+        {processedFallback}
+      </div>
+    )
+  }
 
   try {
     return (

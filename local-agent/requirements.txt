@@ -1,0 +1,18 @@
+# Scintilla Local Agent Dependencies
+
+# HTTP client for communicating with Scintilla server
+aiohttp>=3.9.0
+
+# Configuration and data handling
+pydantic>=2.0.0
+PyYAML>=6.0
+
+# Additional useful libraries for tools
+requests>=2.31.0
+python-dateutil>=2.8.0
+
+# Optional: Enhanced file operations
+pathlib2>=2.3.0
+
+# Optional: System monitoring
+psutil>=5.9.0 

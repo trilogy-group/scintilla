@@ -1,0 +1,76 @@
+# Scintilla Local Agent - MCP Servers Configuration Example
+# Copy this file to mcp_servers.yaml and customize with your actual credentials
+
+servers:
+  # Atlassian MCP Server - for Jira, Confluence, etc.
+  # Docker image: https://github.com/sooperset/mcp-atlassian
+  - name: "khoros-atlassian"
+    image: "ghcr.io/sooperset/mcp-atlassian"
+    tag: "latest"
+    auto_start: true
+    capabilities:
+      - "jira_operations"
+      - "confluence_operations"
+      - "atlassian_integration"
+    environment:
+      # Confluence configuration
+      CONFLUENCE_URL: "https://your-confluence-instance.com"
+      CONFLUENCE_PERSONAL_TOKEN: "your_confluence_personal_token_here"
+      CONFLUENCE_SSL_VERIFY: "false"
+      # Jira configuration  
+      JIRA_URL: "https://your-jira-instance.com"
+      JIRA_PERSONAL_TOKEN: "your_jira_personal_token_here"
+      JIRA_SSL_VERIFY: "false"
+    volumes: {}
+
+  # Example: File system operations
+  # - name: "filesystem"
+  #   image: "your-registry/mcp-filesystem"
+  #   tag: "latest"
+  #   auto_start: true
+  #   capabilities:
+  #     - "file_operations"
+  #     - "local_search"
+  #   environment:
+  #     # Add any environment variables your MCP server needs
+  #     HOME_DIRECTORY: "/home/user"
+  #   volumes:
+  #     # Mount local directories into the container
+  #     "/home/user/workspace": "/workspace"
+  #     "/home/user/documents": "/documents"
+
+  # Example: Database operations
+  # - name: "database"
+  #   image: "your-registry/mcp-database"
+  #   tag: "latest"
+  #   auto_start: false  # Start manually when needed
+  #   capabilities:
+  #     - "sql_operations"
+  #     - "data_analysis"
+  #   environment:
+  #     DATABASE_URL: "postgresql://user:password@localhost:5432/database_name"
+  #     DB_TIMEOUT: "30"
+  #   volumes: {}
+
+  # Example: Custom API integration
+  # - name: "custom-api"
+  #   image: "your-registry/mcp-custom-api"
+  #   tag: "v1.0.0"
+  #   auto_start: true
+  #   capabilities:
+  #     - "api_operations"
+  #     - "external_integration"
+  #   environment:
+  #     API_KEY: "your_api_key_here"
+  #     API_BASE_URL: "https://api.example.com"
+  #     RATE_LIMIT: "100"
+  #   volumes: {}
+
+# Configuration notes:
+# - name: Unique identifier for the MCP server
+# - image: Docker image name (must support MCP protocol via stdio)
+# - tag: Docker image tag (use specific versions for production)
+# - auto_start: Whether to start automatically when agent starts
+# - capabilities: List of capabilities this server provides
+# - environment: Environment variables passed to the container
+# - volumes: Local paths mounted into the container (format: "host_path": "container_path") 

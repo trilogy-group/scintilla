@@ -27,6 +27,13 @@ from src.agents.citations import CitationManager
 
 logger = structlog.get_logger()
 
+# Scintilla Local Agent Protocol - User must use these URL schemes for local tools
+SCINTILLA_LOCAL_SCHEMES = [
+    "local://",     # Generic local execution: local://tool-name
+    "stdio://",     # STDIO MCP servers: stdio://path/to/server
+    "agent://",     # Local agent execution: agent://capability-name
+]
+
 # Configuration constants
 MAX_TOOL_ITERATIONS = 10
 CONVERSATION_HISTORY_LIMIT = 10
@@ -51,6 +58,11 @@ class FastMCPAgent:
         self.loaded_sources: List[str] = []
         self.source_instructions: Dict[str, str] = {}  # Map source name to instructions
         self.citation_manager = CitationManager()
+        
+        # Tool classification for local vs remote execution
+        self.local_tools: List[BaseTool] = []
+        self.remote_tools: List[BaseTool] = []
+        
         logger.info("FastMCPAgent initialized")
     
     async def load_tools_from_cache(
@@ -76,12 +88,83 @@ class FastMCPAgent:
         # Get source instructions from the tool manager
         self.source_instructions = await self.tool_manager.get_source_instructions(db)
         
-        logger.info("FastMCP tools loaded", tool_count=tool_count, sources=len(self.loaded_sources))
+        # Classify tools for routing
+        self._classify_tools()
+        
+        logger.info("FastMCP tools loaded and classified", 
+                   tool_count=tool_count, 
+                   sources=len(self.loaded_sources),
+                   local_tools=len(self.local_tools),
+                   remote_tools=len(self.remote_tools))
         return tool_count
     
     def filter_search_tools(self) -> List[BaseTool]:
         """Filter to search/read-only tools"""
         return self.tool_manager.filter_search_tools()
+    
+    def _classify_tools(self):
+        """Classify tools as local or remote based on patterns"""
+        self.local_tools = []
+        self.remote_tools = []
+        
+        for tool in self.tools:
+            if self._is_local_tool(tool):
+                self.local_tools.append(tool)
+            else:
+                self.remote_tools.append(tool)
+    
+    def _is_local_tool(self, tool: BaseTool) -> bool:
+        """
+        Determine if a tool should be executed locally using Scintilla's explicit URL scheme.
+        
+        Users must use one of these URL schemes in their source configuration:
+        - local://tool-name     (generic local execution)
+        - stdio://path/to/server (STDIO MCP servers)  
+        - agent://capability    (local agent execution)
+        """
+        
+        # Check tool metadata for source information
+        if hasattr(tool, 'metadata') and tool.metadata:
+            source_id = tool.metadata.get('source_id')
+            if source_id:
+                # Find the source URL from loaded server configs
+                for config in self.tool_manager.server_configs:
+                    if config.source_id == source_id:
+                        source_url = config.server_url.lower()
+                        
+                        # Check for Scintilla local schemes
+                        for scheme in SCINTILLA_LOCAL_SCHEMES:
+                            if source_url.startswith(scheme):
+                                logger.info(f"✅ Tool {tool.name} marked as LOCAL due to scheme '{scheme}' in {source_url}")
+                                return True
+                        
+                        # If no local scheme found, it's remote
+                        logger.debug(f"☁️ Tool {tool.name} marked as REMOTE - URL: {source_url}")
+                        return False
+        
+        # No source metadata found - assume remote for safety
+        logger.warning(f"⚠️ Tool {tool.name} has no source metadata - assuming REMOTE")
+        return False
+    
+    async def _execute_local_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Execute a tool via local agents"""
+        try:
+            # Import here to avoid circular imports
+            from src.api.local_agents import execute_local_tool
+            
+            # Execute via local agent system
+            result = await execute_local_tool(tool_name, arguments, timeout_seconds=60)
+            
+            if result.get("success"):
+                return result.get("result", "")
+            else:
+                error_msg = result.get("error", "Unknown error")
+                logger.warning(f"Local tool execution failed: {tool_name}", error=error_msg)
+                return f"Error executing local tool {tool_name}: {error_msg}"
+                
+        except Exception as e:
+            logger.error(f"Failed to execute local tool {tool_name}", error=str(e))
+            return f"Error executing local tool {tool_name}: {str(e)}"
     
     async def load_conversation_history(
         self, 
@@ -170,8 +253,10 @@ AVAILABLE SEARCH TOOLS ({len(search_tools)} tools):
 {tools_context}
 
 CITATION REQUIREMENTS (only when using tools):
-- ALWAYS cite sources using [1], [2], [3] format after relevant information
-- ONLY cite information that came from actual tool results
+- Cite sources using [1], [2], [3] format ONLY when specifically referencing information from that source
+- Don't add citations to general introductory sentences or summaries
+- Only cite when the information comes directly from a specific tool result
+- For example: "The ticket PDR-148554 has status 'Requested' [1]" NOT "Here are the tickets [1]:"
 - Don't worry about making links clickable - I'll handle that in post-processing
 - I will provide a comprehensive Sources section automatically - do NOT add your own <SOURCES> section
 
@@ -185,7 +270,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
         tool_calls: List[Dict], 
         message: str
     ) -> Tuple[List[ToolMessage], List[Dict]]:
-        """Execute tool calls and return results"""
+        """Execute tool calls and return results (supports both local and remote tools)"""
         tool_results = []
         tools_called = []
         
@@ -216,8 +301,15 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     tool_results.append(tool_message)
                     continue
                 
-                # Execute the tool
-                tool_result = await target_tool.ainvoke(tool_args)
+                # Route to local or remote execution
+                if self._is_local_tool(target_tool):
+                    # Execute via local agents
+                    logger.info(f"🏠 Executing local tool: {tool_name}", args=tool_args)
+                    tool_result = await self._execute_local_tool(tool_name, tool_args)
+                else:
+                    # Execute via remote MCP (existing logic)
+                    logger.info(f"☁️ Executing remote tool: {tool_name}", args=tool_args)
+                    tool_result = await target_tool.ainvoke(tool_args)
                 
                 # Enhanced source extraction using SimpleSourceExtractor
                 from src.agents.citations import SimpleSourceExtractor
@@ -368,6 +460,15 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     
                     tools_called.extend(call_results)
                     messages.extend(tool_results)
+                    
+                    # CRITICAL: Add citation context after tools are executed
+                    # This tells the LLM which sources correspond to which citation numbers
+                    citation_context = self.citation_manager.get_citation_context_for_llm()
+                    if citation_context:
+                        citation_message = HumanMessage(content=citation_context)
+                        messages.append(citation_message)
+                        logger.info(f"Added citation context with {len(self.citation_manager.sources)} sources")
+                    
                     continue
                 else:
                     # Final response

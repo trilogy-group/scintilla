@@ -19,6 +19,7 @@ import structlog
 from src.config import settings
 from src.db.base import get_db_session
 from src.db.models import User
+from src.auth.agent_tokens import AgentTokenService
 
 logger = structlog.get_logger()
 
@@ -289,4 +290,35 @@ def verify_jwt_token(token: str) -> Dict[str, Any]:
     except jwt.ExpiredSignatureError:
         raise AuthenticationError("Token expired")
     except jwt.InvalidTokenError:
-        raise AuthenticationError("Invalid token") 
+        raise AuthenticationError("Invalid token")
+
+
+async def get_current_user_with_agent_token(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session)
+) -> User:
+    """
+    Authentication dependency that supports both Google OAuth and Agent Tokens
+    
+    Checks Authorization header for:
+    1. Bearer <agent_token> - for local agents
+    2. Standard OAuth flow - for web users
+    """
+    
+    # Check for agent token first
+    authorization = request.headers.get("Authorization")
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]  # Remove "Bearer " prefix
+        
+        if token.startswith("scat_"):  # Agent token
+            user = await AgentTokenService.validate_token(db, token)
+            if user:
+                return user
+            else:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or expired agent token"
+                )
+    
+    # Fall back to standard OAuth
+    return await get_current_user(request, db) 

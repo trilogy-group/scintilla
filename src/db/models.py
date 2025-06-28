@@ -31,6 +31,7 @@ class User(Base):
     created_bots = relationship("Bot", back_populates="created_by_user", cascade="all, delete-orphan")
     bot_access = relationship("UserBotAccess", back_populates="user", cascade="all, delete-orphan")
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+    agent_tokens = relationship("UserAgentToken", back_populates="user", cascade="all, delete-orphan")
     
     # Source sharing relationships
     granted_source_shares = relationship("SourceShare", foreign_keys="SourceShare.granted_by_user_id", back_populates="granted_by_user")
@@ -205,4 +206,26 @@ class SourceTool(Base):
     source = relationship("Source", back_populates="tools")
 
     def __repr__(self):
-        return f"<SourceTool(tool_name='{self.tool_name}', source_id='{self.source_id}')>" 
+        return f"<SourceTool(tool_name='{self.tool_name}', source_id='{self.source_id}')>"
+
+
+class UserAgentToken(Base):
+    """User tokens for local agent authentication"""
+    __tablename__ = "user_agent_tokens"
+    
+    token_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)  # SHA-256 hash
+    token_prefix = Column(String(8), nullable=False)  # First 8 chars for display
+    name = Column(String(100), nullable=True)  # User-given name for token
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # Optional expiration
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship
+    user = relationship("User", back_populates="agent_tokens")
+    
+    def __repr__(self):
+        return f"<UserAgentToken(prefix='{self.token_prefix}', user_id='{self.user_id}')>" 
