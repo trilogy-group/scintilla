@@ -1,28 +1,48 @@
 // Scintilla API Service
 // Handles communication with the backend search system
 
-// Smart API URL detection:
-// - Development: Use full localhost URL (frontend runs on different port)
-// - Production: Use HTTPS with current hostname or relative URLs
-// - Override: VITE_API_URL environment variable takes precedence
-const BASE_URL = import.meta.env.VITE_API_URL || 
-  (import.meta.env.DEV 
-    ? 'http://localhost:8000' 
-    : window.location.protocol === 'https:' 
-      ? `https://${window.location.hostname}`
-      : ''
-  )
+// API URL detection now handled lazily in APIService.getBaseURL()
 
 class APIService {
   constructor() {
-    this.baseURL = BASE_URL
     this.authToken = null
+    
+    // Calculate baseURL lazily to ensure window.location is available
+    this.baseURL = this.getBaseURL()
+    console.log('APIService initialized with baseURL:', this.baseURL)
     
     // Initialize with stored token if available
     const storedToken = localStorage.getItem('scintilla_token')
     if (storedToken) {
       this.authToken = storedToken
     }
+  }
+
+  getBaseURL() {
+    // Smart API URL detection with lazy evaluation
+    const viteApiUrl = import.meta.env.VITE_API_URL
+    const isDev = import.meta.env.DEV
+    
+    if (viteApiUrl) {
+      console.log('Using VITE_API_URL:', viteApiUrl)
+      return viteApiUrl
+    }
+    
+    if (isDev) {
+      console.log('Development mode: using localhost')
+      return 'http://localhost:8000'
+    }
+    
+    // Production mode - ensure HTTPS if page is served over HTTPS
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+      const httpsUrl = `https://${window.location.hostname}`
+      console.log('Production HTTPS mode:', httpsUrl)
+      return httpsUrl
+    }
+    
+    // Fallback to relative URLs
+    console.log('Using relative URLs')
+    return ''
   }
 
   setAuthToken(token) {
