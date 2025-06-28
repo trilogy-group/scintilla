@@ -288,11 +288,11 @@ class APIService {
 
   // Agent Token endpoints
   async getAgentTokens() {
-    return this.request('/api/agent-tokens')
+    return this.request('/api/agent-tokens/')
   }
 
   async createAgentToken(tokenData) {
-    return this.request('/api/agent-tokens', {
+    return this.request('/api/agent-tokens/', {
       method: 'POST',
       body: tokenData
     })
@@ -305,7 +305,7 @@ class APIService {
   }
 
   async deleteAllAgentTokens() {
-    return this.request('/api/agent-tokens', {
+    return this.request('/api/agent-tokens/', {
       method: 'DELETE'
     })
   }
