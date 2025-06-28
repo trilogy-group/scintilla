@@ -3,10 +3,15 @@
 
 // Smart API URL detection:
 // - Development: Use full localhost URL (frontend runs on different port)
-// - Production: Use relative URLs (frontend and backend on same domain)
+// - Production: Use HTTPS with current hostname or relative URLs
 // - Override: VITE_API_URL environment variable takes precedence
 const BASE_URL = import.meta.env.VITE_API_URL || 
-  (import.meta.env.DEV ? 'http://localhost:8000' : '')
+  (import.meta.env.DEV 
+    ? 'http://localhost:8000' 
+    : window.location.protocol === 'https:' 
+      ? `https://${window.location.hostname}`
+      : ''
+  )
 
 class APIService {
   constructor() {
