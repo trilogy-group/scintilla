@@ -59,12 +59,34 @@ def confirm_destructive_action():
     response = input("\nType 'DESTROY_AND_RECREATE' to confirm: ")
     return response == "DESTROY_AND_RECREATE"
 
-async def drop_and_recreate_tables():
-    """Drop all tables and recreate from models"""
+async def main():
+    """Main execution function"""
+    print("🔧 Scintilla Database Recreation Tool")
     
-    # Create async engine
+    # Check database connection using async engine
     async_database_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
     engine = create_async_engine(async_database_url)
+    
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT version()"))
+            version = result.fetchone()[0]
+            logger.info("📡 Database connection successful", version=version[:50])
+        
+    except Exception as e:
+        logger.error("❌ Database connection failed", error=str(e))
+        print(f"\n❌ Cannot connect to database: {e}")
+        print("💡 Check your DATABASE_URL and ensure the database is running")
+        await engine.dispose()
+        sys.exit(1)
+    
+    # Confirm destructive action
+    if not confirm_destructive_action():
+        print("\n🚫 Operation cancelled by user")
+        await engine.dispose()
+        sys.exit(0)
+    
+    print("\n🚀 Starting database recreation...")
     
     try:
         async with engine.begin() as conn:
@@ -95,45 +117,7 @@ async def drop_and_recreate_tables():
             print(f"📊 Created {len(tables)} tables:")
             for table in tables:
                 print(f"   • {table}")
-                
-    except Exception as e:
-        logger.error("❌ Database operation failed", error=str(e))
-        raise
-    finally:
-        await engine.dispose()
-
-async def main():
-    """Main execution function"""
-    print("🔧 Scintilla Database Recreation Tool")
-    
-    # Check database connection
-    try:
-        # Test connection with sync engine first
-        sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-        sync_engine = create_engine(sync_url)
         
-        with sync_engine.connect() as conn:
-            result = conn.execute(text("SELECT version()"))
-            version = result.fetchone()[0]
-            logger.info("📡 Database connection successful", version=version[:50])
-        
-        sync_engine.dispose()
-        
-    except Exception as e:
-        logger.error("❌ Database connection failed", error=str(e))
-        print(f"\n❌ Cannot connect to database: {e}")
-        print("💡 Check your DATABASE_URL and ensure the database is running")
-        sys.exit(1)
-    
-    # Confirm destructive action
-    if not confirm_destructive_action():
-        print("\n🚫 Operation cancelled by user")
-        sys.exit(0)
-    
-    print("\n🚀 Starting database recreation...")
-    
-    try:
-        await drop_and_recreate_tables()
         print("\n🎉 Success! Database schema has been recreated.")
         print("\n📋 Next steps:")
         print("   1. Verify the application starts: python src/main.py")
@@ -144,6 +128,8 @@ async def main():
         print(f"\n❌ Failed to recreate database: {e}")
         logger.error("Database recreation failed", error=str(e))
         sys.exit(1)
+    finally:
+        await engine.dispose()
 
 if __name__ == "__main__":
     asyncio.run(main()) 
