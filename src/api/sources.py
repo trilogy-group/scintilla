@@ -532,7 +532,12 @@ async def refresh_source_tools(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Refresh tools from an MCP server using FastMCP and update the database cache."""
+    """
+    Refresh tools from any source (remote MCP or local agent) and update the database cache.
+    
+    For local sources, this automatically discovers tools from agents first if needed,
+    then validates them. For remote sources, it directly connects to the MCP server.
+    """
     
     # Get source and extract all needed attributes early
     source = await db.get(Source, source_id)
@@ -577,13 +582,210 @@ async def refresh_source_tools(
     if not user_can_refresh:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    # Check if this is a local source (starts with local://)
+    is_local_source = source_url.startswith('local://')
+    
+    if is_local_source:
+        # For local sources, handle agent tool discovery first
+        return await _refresh_local_source_tools(
+            source_id_value, source_name, source_url, db
+        )
+    else:
+        # For remote sources, use FastMCP directly
+        return await _refresh_remote_source_tools(
+            source_id_value, source_name, db
+        )
+
+
+async def _refresh_local_source_tools(
+    source_id: uuid.UUID,
+    source_name: str, 
+    source_url: str,
+    db: AsyncSession
+):
+    """Handle tool refresh for local sources with automatic agent discovery"""
+    
     try:
-        logger.info(f"Refreshing tools using FastMCP for source: {source_name}")
+        # Extract capability from local URL (e.g., local://jira_operations -> jira_operations)
+        capability = source_url.replace('local://', '')
+        
+        logger.info(f"Refreshing local source tools", 
+                   source_name=source_name, 
+                   capability=capability)
+        
+        # Import local agent manager
+        from src.api.local_agents import local_agent_manager
+        
+        # Find an agent that can handle this capability
+        capable_agent_id = None
+        for agent_id, agent in local_agent_manager.agents.items():
+            if capability in agent.capabilities:
+                capable_agent_id = agent_id
+                break
+        
+        if not capable_agent_id:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"No active local agent found with capability '{capability}'. Please ensure a local agent with this capability is running and registered."
+            )
+        
+        logger.info(f"Found capable agent for local source refresh",
+                   agent_id=capable_agent_id,
+                   capability=capability)
+        
+        # Check if we already have cached tools
+        from src.db.tool_cache import ToolCacheService
+        existing_tools = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
+        
+        if not existing_tools:
+            # No cached tools - need to discover them first
+            logger.info(f"No cached tools found - discovering from agent {capable_agent_id}")
+            
+            # Submit a tool discovery task to the agent
+            discovery_task_id = local_agent_manager.submit_task(
+                tool_name="__discovery__",  # Special internal task
+                arguments={"capability": capability},
+                timeout_seconds=30
+            )
+            
+            # Wait for the agent to provide its tools
+            result = await local_agent_manager.wait_for_task_result(discovery_task_id, timeout_seconds=30)
+            
+            if not result or not result.success:
+                error_msg = result.error if result else "Tool discovery timed out"
+                
+                # Update source with error
+                from sqlalchemy import update
+                await db.execute(
+                    update(Source)
+                    .where(Source.source_id == source_id)
+                    .values(
+                        tools_cache_status="error",
+                        tools_cache_error=error_msg
+                    )
+                )
+                await db.commit()
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Agent tool discovery failed: {error_msg}"
+                )
+            
+            # Parse tools from agent response
+            tools_data = result.result
+            if isinstance(tools_data, str):
+                import json
+                try:
+                    tools_data = json.loads(tools_data)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse tools JSON: {e}, raw data: {tools_data}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Failed to parse agent response: {str(e)}"
+                    )
+            
+            if not isinstance(tools_data, dict):
+                logger.error(f"Expected dict from agent, got {type(tools_data)}: {tools_data}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid response format from agent: expected dict, got {type(tools_data)}"
+                )
+            
+            tools = tools_data.get("tools", [])
+            
+            # Cache the discovered tools
+            from src.db.models import SourceTool
+            from sqlalchemy import delete
+            from datetime import datetime, timezone
+            
+            # Clear existing cached tools for this source
+            await db.execute(
+                delete(SourceTool).where(SourceTool.source_id == source_id)
+            )
+            
+            # Cache the discovered tools
+            tools_count = 0
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("name"):
+                    source_tool = SourceTool(
+                        source_id=source_id,
+                        tool_name=tool["name"],
+                        tool_description=tool.get("description", ""),
+                        tool_schema=tool.get("inputSchema", {}),
+                        last_refreshed_at=datetime.now(timezone.utc),
+                        is_active=True
+                    )
+                    db.add(source_tool)
+                    tools_count += 1
+            
+            # Update source status
+            from sqlalchemy import update
+            await db.execute(
+                update(Source)
+                .where(Source.source_id == source_id)
+                .values(
+                    tools_cache_status="cached",
+                    tools_last_cached_at=datetime.now(timezone.utc),
+                    tools_cache_error=None
+                )
+            )
+            
+            await db.commit()
+            
+            logger.info(f"Successfully discovered and cached {tools_count} tools for local source {source_name}")
+            
+            return RefreshResponse(
+                message=f"Successfully discovered and cached {tools_count} tools from local agent {capable_agent_id}",
+                tools_count=tools_count,
+                timestamp=datetime.utcnow()
+            )
+        else:
+            # Tools already cached - validate them
+            logger.info(f"Found {len(existing_tools)} cached tools - validating with FastMCP")
+            
+            # Use FastMCP to validate the cached tools
+            success, message, tool_count = await FastMCPService.discover_and_cache_tools(
+                db=db,
+                source_id=source_id
+            )
+            
+            if not success:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Tool validation failed: {message}"
+                )
+            
+            return RefreshResponse(
+                message=f"Successfully validated {tool_count} cached tools for local source",
+                tools_count=tool_count,
+                timestamp=datetime.utcnow()
+            )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Failed to refresh local source tools for {source_name}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to refresh local source tools: {str(e)}"
+        )
+
+
+async def _refresh_remote_source_tools(
+    source_id: uuid.UUID,
+    source_name: str,
+    db: AsyncSession
+):
+    """Handle tool refresh for remote MCP sources"""
+    
+    try:
+        logger.info(f"Refreshing remote source tools using FastMCP: {source_name}")
         
         # Use FastMCP service to discover and cache tools (simplified interface)
         success, message, tool_count = await FastMCPService.discover_and_cache_tools(
             db=db,
-            source_id=source_id_value
+            source_id=source_id
         )
         
         if not success:
@@ -592,7 +794,7 @@ async def refresh_source_tools(
                 detail=f"Tool refresh failed: {message}"
             )
         
-        logger.info(f"Successfully refreshed and cached {tool_count} tools for source: {source_name}")
+        logger.info(f"Successfully refreshed and cached {tool_count} tools for remote source: {source_name}")
         
         return RefreshResponse(
             message=f"Successfully refreshed {tool_count} tools using FastMCP",
@@ -604,10 +806,10 @@ async def refresh_source_tools(
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        logger.error(f"Failed to refresh tools for source {source_name}: {e}")
+        logger.error(f"Failed to refresh remote source tools for {source_name}: {e}")
         raise HTTPException(
             status_code=500, 
-            detail=f"Failed to refresh tools: {str(e)}"
+            detail=f"Failed to refresh remote source tools: {str(e)}"
         )
 
 
