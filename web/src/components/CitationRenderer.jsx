@@ -8,13 +8,12 @@ import { ExternalLink } from 'lucide-react'
  */
 export const CitationLink = ({ number, onClick, className = "" }) => {
   return (
-    <button
-      onClick={() => onClick?.(number)}
-      className={`citation-link inline-flex items-center text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 py-0.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors cursor-pointer ${className}`}
-      title={`Go to source ${number}`}
+    <span
+      className={`citation-link inline-flex items-center text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 py-0.5 rounded ${className}`}
+      title={`Source ${number}`}
     >
       [{number}]
-    </button>
+    </span>
   )
 }
 

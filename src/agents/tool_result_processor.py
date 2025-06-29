@@ -109,7 +109,7 @@ class ToolResultProcessor:
             r'\[.*?\]\((https?://[^\)]+)\)',
             # HTML links
             r'href=["\']?(https?://[^"\'>\s]+)',
-            # JSON fields
+            # JSON fields - prioritize meaningful URLs
             r'"(?:url|html_url|web_url|browse_url|permalink|link|href)":\s*"(https?://[^"]+)"',
         ]
         
@@ -120,10 +120,40 @@ class ToolResultProcessor:
                 url = match if isinstance(match, str) else match[0]
                 # Clean up URL
                 url = url.strip().rstrip('.,;:')
-                # Skip images and duplicates
-                if url and url not in seen_urls and not url.endswith(('.png', '.jpg', '.gif', '.svg')):
-                    seen_urls.add(url)
-                    urls.append(url)
+                
+                # Skip invalid URLs
+                if not url or url in seen_urls:
+                    continue
+                
+                # Skip images
+                if url.endswith(('.png', '.jpg', '.gif', '.svg', '.ico', '.jpeg', '.webp')):
+                    continue
+                
+                # Skip avatar and icon URLs
+                if any(skip_pattern in url.lower() for skip_pattern in [
+                    'avatar', 'icon', 'useravatar', 'viewavatar', 'avatartype=', 
+                    'avatarId=', 'secure/useravatar', 'secure/viewavatar'
+                ]):
+                    continue
+                
+                # Skip other non-content URLs
+                if any(skip_pattern in url.lower() for skip_pattern in [
+                    'images/icons/', '/images/status', '/secure/thumbnail'
+                ]):
+                    continue
+                
+                # Convert Jira API URLs to browse URLs
+                if '/rest/api/' in url and '/issue/' in url:
+                    # Extract issue ID and convert to browse URL
+                    issue_id_match = re.search(r'/rest/api/\d+/issue/(\d+)', url)
+                    if issue_id_match:
+                        base_url = url.split('/rest/api/')[0]
+                        # We need the issue key, not just ID - will be handled in Jira-specific processing
+                        # For now, skip API URLs and let Jira processing handle browse URL construction
+                        continue
+                
+                seen_urls.add(url)
+                urls.append(url)
         
         return urls
     
@@ -282,8 +312,12 @@ class ToolResultProcessor:
         if 'pr_number' in tool_params:
             metadata.identifiers['pr_number'] = str(tool_params['pr_number'])
         
+        # Special handling for Jira tools - construct browse URLs
+        if metadata.source_type == 'jira':
+            ToolResultProcessor._construct_jira_browse_urls(metadata, str(metadata.raw_data))
+        
         # Construct URLs if we have enough information
-        if metadata.source_type == 'jira' and 'base_url' in tool_params:
+        elif metadata.source_type == 'jira' and 'base_url' in tool_params:
             base_url = tool_params['base_url']
             if metadata.identifiers.get('primary_ticket'):
                 constructed_url = f"{base_url}/browse/{metadata.identifiers['primary_ticket']}"
@@ -302,4 +336,59 @@ class ToolResultProcessor:
             elif metadata.identifiers.get('pr_number'):
                 constructed_url = f"{base_url}/pull/{metadata.identifiers['pr_number']}"
                 if constructed_url not in metadata.urls:
-                    metadata.urls.insert(0, constructed_url) 
+                    metadata.urls.insert(0, constructed_url)
+    
+    @staticmethod
+    def _construct_jira_browse_urls(metadata: ToolResultMetadata, content: str) -> None:
+        """Construct proper Jira browse URLs from issue data"""
+        try:
+            # Try to parse as JSON first
+            if content.strip().startswith('{'):
+                data = json.loads(content)
+                
+                # Extract base URL from self field or first issue
+                base_url = None
+                if data.get('self'):
+                    match = re.match(r'(https?://[^/]+)', data.get('self'))
+                    if match:
+                        base_url = match.group(1)
+                
+                # Handle single issue
+                if 'key' in data:
+                    issue_key = data.get('key')
+                    if base_url and issue_key:
+                        browse_url = f"{base_url}/browse/{issue_key}"
+                        if browse_url not in metadata.urls:
+                            metadata.urls.insert(0, browse_url)
+                
+                # Handle multiple issues
+                elif 'issues' in data:
+                    issues = data.get('issues', [])
+                    if not base_url and issues:
+                        # Try to get base URL from first issue
+                        first_issue = issues[0]
+                        api_url = first_issue.get('self', '') or first_issue.get('url', '')
+                        if api_url:
+                            match = re.match(r'(https?://[^/]+)', api_url)
+                            if match:
+                                base_url = match.group(1)
+                    
+                    # Construct browse URLs for issues
+                    for issue in issues[:5]:  # Limit to first 5 issues
+                        issue_key = issue.get('key')
+                        if base_url and issue_key:
+                            browse_url = f"{base_url}/browse/{issue_key}"
+                            if browse_url not in metadata.urls:
+                                metadata.urls.append(browse_url)
+                
+        except (json.JSONDecodeError, Exception) as e:
+            logger.debug(f"Could not parse Jira JSON for URL construction: {e}")
+            
+            # Fallback: try to extract base URL from any Jira URL in content
+            jira_url_pattern = r'(https://[^/\s]+\.atlassian\.net|https://[^/\s]+/jira)'
+            match = re.search(jira_url_pattern, content)
+            if match and metadata.identifiers.get('primary_ticket'):
+                base_url = match.group(1)
+                browse_url = f"{base_url}/browse/{metadata.identifiers['primary_ticket']}"
+                if browse_url not in metadata.urls:
+                    metadata.urls.insert(0, browse_url) 
