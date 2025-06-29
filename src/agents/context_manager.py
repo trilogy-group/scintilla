@@ -58,6 +58,11 @@ class TokenEstimator:
         if not text:
             return 0
         
+        # Handle non-string types that might be passed (like lists from selected_bots)
+        if not isinstance(text, str):
+            # Convert to string representation
+            text = str(text)
+        
         # Remove extra whitespace
         cleaned = re.sub(r'\s+', ' ', text.strip())
         
