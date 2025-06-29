@@ -343,6 +343,9 @@ function App() {
     setCurrentView('chat') // Switch to chat view
     setQuery(searchQuery) // Set the query
     
+    // Always start a new conversation from landing page
+    startNewConversation()
+    
     // Start the search if there's a query
     if (searchQuery.trim()) {
       // Add placeholder conversation immediately

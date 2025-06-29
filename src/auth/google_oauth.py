@@ -40,13 +40,29 @@ async def verify_google_token(token: str) -> Dict[str, Any]:
     """
     Verify Google ID token and return user claims
     """
+    logger.info("Starting Google token verification", token_length=len(token))
     try:
         # For development, we can use Google's tokeninfo endpoint
         # In production, you should verify the JWT signature properly
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
-            )
+        
+        # Configure httpx client with better error handling and IPv4 preference
+        timeout = httpx.Timeout(30.0)  # 30 second timeout
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                logger.info("Making request to Google tokeninfo API")
+                response = await client.get(
+                    f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
+                )
+                logger.info("Received response from Google", status_code=response.status_code)
+            except (httpx.ConnectError, httpx.RequestError) as e:
+                # If DNS/connection fails, try with direct IP as fallback
+                logger.warning("Primary request failed, trying IP fallback", error=str(e))
+                response = await client.get(
+                    f"https://142.251.111.95/tokeninfo?id_token={token}",
+                    headers={"Host": "oauth2.googleapis.com"}
+                )
+                logger.info("IP fallback successful", status_code=response.status_code)
             
             if response.status_code != 200:
                 raise AuthenticationError("Invalid token")
@@ -77,11 +93,14 @@ async def verify_google_token(token: str) -> Dict[str, Any]:
             return token_info
             
     except httpx.RequestError as e:
-        logger.error("Failed to verify token", error=str(e))
-        raise AuthenticationError("Token verification failed")
+        logger.error("Failed to verify token - network error", error=str(e), error_type=type(e).__name__)
+        raise AuthenticationError(f"Token verification failed: {str(e)}")
+    except httpx.TimeoutException as e:
+        logger.error("Token verification timeout", error=str(e))
+        raise AuthenticationError("Token verification timed out")
     except Exception as e:
-        logger.error("Token verification error", error=str(e))
-        raise AuthenticationError("Invalid token")
+        logger.error("Token verification error", error=str(e), error_type=type(e).__name__)
+        raise AuthenticationError(f"Invalid token: {str(e)}")
 
 
 async def create_or_update_user_from_google(db: AsyncSession, token_info: Dict[str, Any]) -> User:

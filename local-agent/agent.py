@@ -436,15 +436,12 @@ class ScintillaLocalAgent:
                     if result.get("has_work"):
                         self.logger.info(f"📥 Received task: {result['task']['task_id']} - {result['task']['tool_name']}")
                         return result["task"]
-                    else:
-                        self.logger.debug(f"No work available (polling)")
                     return None
                 elif response.status != 204:  # 204 is expected for no work
                     error_text = await response.text()
                     self.logger.warning(f"Poll failed ({response.status}): {error_text}")
                     return None
                 else:
-                    self.logger.debug(f"No work available (204)")
                     return None
                     
         except Exception as e:
