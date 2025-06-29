@@ -520,12 +520,6 @@ async def get_source_status(
     )
 
 
-
-
-
-
-
-
 @router.post("/{source_id}/refresh")
 async def refresh_source_tools(
     source_id: uuid.UUID,
@@ -696,7 +690,6 @@ async def _refresh_local_source_tools(
             # Cache the discovered tools
             from src.db.models import SourceTool
             from sqlalchemy import delete
-            from datetime import datetime, timezone
             
             # Clear existing cached tools for this source
             await db.execute(
