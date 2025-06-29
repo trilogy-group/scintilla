@@ -36,20 +36,27 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
+logger.info("Main module loaded - about to define lifespan")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager with non-blocking startup"""
-    # Startup
-    logger.info("Starting Scintilla application", test_mode=TEST_MODE)
-    
-    logger.info("Scintilla application started - tools load from sources on-demand")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down Scintilla application")
+    try:
+        # Startup
+        logger.info("Starting Scintilla application", test_mode=TEST_MODE)
+        
+        logger.info("Scintilla application started - tools load from sources on-demand")
+        
+        yield
+        
+        # Shutdown
+        logger.info("Shutting down Scintilla application")
+    except Exception as e:
+        logger.error("Error during application lifespan", error=str(e), error_type=type(e).__name__)
+        import traceback
+        logger.error("Lifespan error traceback", traceback=traceback.format_exc())
+        raise
 
 
 # Create FastAPI app
@@ -70,7 +77,9 @@ app.add_middleware(
 )
 
 # Include routers
+logger.info("About to include auth router")
 app.include_router(auth.router, prefix="/api", tags=["authentication"])
+logger.info("Auth router included successfully")
 app.include_router(query.router, prefix="/api", tags=["query"])
 app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 app.include_router(bots.router, prefix="/api", tags=["bots"])

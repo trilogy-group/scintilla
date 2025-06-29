@@ -24,8 +24,10 @@ from src.db.base import get_db_session
 from src.db.models import User
 
 logger = structlog.get_logger()
+logger.info("Auth module imported - setting up router")
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+logger.info("Auth router created successfully")
 
 
 class LoginRequest(BaseModel):
@@ -96,7 +98,10 @@ async def login(
         logger.warning("Login failed", error=str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
-        logger.error("Login error", error=str(e))
+        logger.error("Login error", error=str(e), error_type=type(e).__name__)
+        # Log the full exception details
+        import traceback
+        logger.error("Login error traceback", traceback=traceback.format_exc())
         raise HTTPException(status_code=500, detail="Login failed")
 
 
