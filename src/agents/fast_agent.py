@@ -442,10 +442,8 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 messages.extend(optimized_history)
                 messages.append(HumanMessage(content=message))
                 
-                # Add tool results from previous iterations
-                if optimized_tool_results and iteration > 1:
-                    for i, result in enumerate(optimized_tool_results):
-                        messages.append(ToolMessage(content=result, tool_call_id=f"tool_{i}"))
+                # DO NOT add standalone tool results - this causes tool_use_id mismatches
+                # The conversation_history already contains proper tool use/result pairs
                 
                 # Log context usage
                 estimated_tokens = self.context_manager.estimate_current_context(
@@ -518,14 +516,13 @@ Be intelligent about tool usage - search when information is needed, respond dir
             # Build citation guidance from collected metadata
             citation_guidance = self._build_citation_guidance(all_tool_metadata)
             
-            # Create final prompt with citation guidance
+            # Create final prompt with citation guidance - use conversation history instead of recreating tool results
             final_messages = [SystemMessage(content=system_prompt)]
             final_messages.extend(optimized_history)
             final_messages.append(HumanMessage(content=message))
             
-            # Add all tool results
-            for i, result in enumerate(tool_results_str):
-                final_messages.append(ToolMessage(content=result, tool_call_id=f"tool_{i}"))
+            # DO NOT add standalone tool results - this causes tool_use_id mismatches
+            # The optimized_history already contains proper tool use/result pairs
             
             # Add citation guidance as a system message
             if citation_guidance:
