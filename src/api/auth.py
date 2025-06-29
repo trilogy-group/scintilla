@@ -65,8 +65,11 @@ async def login(
     3. Receive JWT token for subsequent requests
     """
     try:
+        logger.info("Auth endpoint called", token_length=len(login_request.google_token))
         # Verify Google token
+        logger.info("About to call verify_google_token")
         token_info = await verify_google_token(login_request.google_token)
+        logger.info("verify_google_token completed successfully")
         
         # Create or update user
         user = await create_or_update_user_from_google(db, token_info)
