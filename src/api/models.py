@@ -21,6 +21,7 @@ class QueryRequest(BaseModel):
     selected_sources: Optional[List[UUID]] = Field(None, description="Optional list of source IDs to use")
     selected_bots: Optional[List[UUID]] = Field(None, description="Optional list of bot IDs to use")
     bot_ids: Optional[List[UUID]] = Field(None, description="Bot IDs for compatibility")
+    selectedBots: Optional[List[Dict[str, Any]]] = Field(None, description="Full bot objects for display purposes")
     llm_provider: Optional[str] = Field(None, description="LLM provider")
     llm_model: Optional[str] = Field(None, description="LLM model")
 
@@ -249,6 +250,7 @@ class MessageResponse(BaseModel):
     llm_model: Optional[str]
     tools_used: Optional[List[str]]
     citations: Optional[List[Dict[str, Any]]]
+    selected_bots: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
 
 

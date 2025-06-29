@@ -40,4 +40,29 @@ docker_timeout: 30
 # Logging level
 # Options: DEBUG, INFO, WARNING, ERROR
 # Use DEBUG for development, INFO for production
-log_level: "INFO" 
+log_level: "INFO"
+
+# ==============================================================================
+# RELIABILITY AND RETRY CONFIGURATION
+# ==============================================================================
+# These settings control how the agent handles connection failures and retries
+
+# Maximum number of retry attempts for failed operations
+max_retry_attempts: 5
+
+# Initial delay before first retry (in seconds)
+initial_retry_delay: 1.0
+
+# Backoff multiplier for exponential backoff
+# Each retry will wait: initial_delay * (backoff_multiplier ^ attempt_number)
+retry_backoff_multiplier: 2.0
+
+# Maximum delay between retries (in seconds)
+# Prevents extremely long waits with exponential backoff
+max_retry_delay: 60.0
+
+# How often to check server health when disconnected (in seconds)
+health_check_interval: 30.0
+
+# Timeout for HTTP requests to server (in seconds)
+connection_timeout: 10.0 

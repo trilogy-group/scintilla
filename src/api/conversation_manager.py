@@ -106,7 +106,8 @@ class ConversationManager:
         llm_provider: str,
         llm_model: str,
         tool_calls: Optional[list] = None,
-        citations: Optional[list] = None
+        citations: Optional[list] = None,
+        selected_bots: Optional[list] = None
     ) -> tuple[uuid.UUID, uuid.UUID]:
         """Save user and assistant messages to conversation"""
         
@@ -114,12 +115,13 @@ class ConversationManager:
         user_msg_id = uuid.uuid4()
         assistant_msg_id = uuid.uuid4()
         
-        # Save user message
+        # Save user message with selected bots
         user_msg = Message(
             message_id=user_msg_id,
             conversation_id=conversation_id,
             role="user",
-            content=user_message
+            content=user_message,
+            selected_bots=selected_bots or []
         )
         self.db.add(user_msg)
         
@@ -196,7 +198,8 @@ class ConversationManager:
                     llm_provider=request.llm_provider or "anthropic",
                     llm_model=request.llm_model or "claude-sonnet-4-20250514",
                     tool_calls=final_chunk.get("tool_calls"),
-                    citations=final_chunk.get("sources")
+                    citations=final_chunk.get("sources"),
+                    selected_bots=request.selectedBots
                 )
                 
                 logger.info("Background conversation save completed", conversation_id=conversation_id)

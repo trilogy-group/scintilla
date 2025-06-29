@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Search, Send, Settings, User, BookOpen, Github, Code, Database, MessageSquare, AlertCircle, CheckCircle, RefreshCw, Bot, Server, Clock, Trash2, Plus, Filter, X } from 'lucide-react'
 import { useScintilla } from './hooks/useScintilla'
 import { useAuth } from './hooks/useAuth'
-import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from './hooks/useBotAutoComplete.jsx'
+import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips, MessageBotsUsed } from './hooks/useBotAutoComplete.jsx'
 import CitationRenderer from './components/CitationRenderer'
 import { SourcesManager } from './components/SourcesManager'
 import { BotsManager } from './components/BotsManager'
@@ -53,7 +53,8 @@ function App() {
     removeSelectedBot,
     clearSelectedBots,
     closeSuggestions,
-    loadBots: loadBotsForAutoComplete
+    loadBots: loadBotsForAutoComplete,
+    addSelectedBot
   } = useBotAutoComplete()
   
   const { 
@@ -211,12 +212,11 @@ function App() {
     if (!query.trim() || isLoading || isSavingConversation) return
 
     // Get clean message and selected bot IDs
-    const { cleanMessage, botIds } = getBotSelectionData(query.trim())
+    const { cleanMessage, botIds, selectedBots } = getBotSelectionData(query.trim())
     const messageToSend = cleanMessage || query.trim()
     
-    // Clear input and selected bots immediately for better UX
+    // Clear input immediately for better UX (but preserve bot selections)
     setQuery('')
-    clearSelectedBots()
     
     // Add placeholder conversation immediately if this is a new conversation
     addPlaceholderConversation(messageToSend)
@@ -224,12 +224,13 @@ function App() {
     // Hide suggestions on submit
     closeSuggestions()
 
-    // Send clean message + selected bot IDs
+    // Send clean message + selected bot IDs + bot information
     await sendMessage(messageToSend, {
       mode: 'conversational',
       stream: true,
       use_user_sources: true,
-      bot_ids: botIds
+      bot_ids: botIds,
+      selectedBots: selectedBots  // Pass bot information for display
     })
   }
 
@@ -347,7 +348,17 @@ function App() {
   const handleLandingSearch = async (searchQuery, options = {}) => {
     setShowLanding(false) // Hide landing page
     setCurrentView('chat') // Switch to chat view
-    setQuery(searchQuery) // Set the query
+    
+    // Transfer bot selections from landing page to main chat
+    if (options.selectedBots && options.selectedBots.length > 0) {
+      // Clear current selections and add the ones from landing page
+      clearSelectedBots()
+      options.selectedBots.forEach(bot => {
+        addSelectedBot(bot)
+      })
+    }
+    
+    setQuery('') // Clear the query input in main chat
     
     // Always start a new conversation from landing page
     startNewConversation()
@@ -361,7 +372,8 @@ function App() {
         mode: 'conversational',
         stream: true,
         use_user_sources: true,
-        bot_ids: options.bot_ids || []
+        bot_ids: options.bot_ids || [],
+        selectedBots: options.selectedBots || []  // Pass bot information for display
       })
     }
   }
@@ -781,6 +793,9 @@ function App() {
                         {message.role === 'user' ? (
                         /* User Message - Boxed and full width */
                         <div className="w-full">
+                          {/* Show bots used for this message */}
+                          <MessageBotsUsed bots={message.selectedBots} />
+                          
                           <div className="bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 px-6 py-4 rounded-2xl shadow-sm">
                             <p className="whitespace-pre-wrap leading-relaxed text-gray-900 dark:text-white">{message.content}</p>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
@@ -984,11 +999,21 @@ function App() {
 
               {/* Input Area */}
               <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-                {/* Selected Bots Chips */}
-                <SelectedBotsChips 
-                  selectedBots={selectedBots} 
-                  onRemoveBot={removeSelectedBot}
-                />
+                {/* Selected Bots Chips with Clear Button */}
+                {selectedBots.length > 0 && (
+                  <div className="flex items-center justify-between mb-3">
+                    <SelectedBotsChips 
+                      selectedBots={selectedBots} 
+                      onRemoveBot={removeSelectedBot}
+                    />
+                    <button
+                      onClick={clearSelectedBots}
+                      className="ml-3 px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      Clear Bots
+                    </button>
+                  </div>
+                )}
                 
                 <form onSubmit={handleSubmit} className="flex space-x-4">
                   <div className="flex-1 relative">

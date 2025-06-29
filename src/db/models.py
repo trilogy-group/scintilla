@@ -177,6 +177,9 @@ class Message(Base):
     tools_used = Column(JSONB, nullable=True, default=list)
     citations = Column(JSONB, nullable=True, default=list)
     
+    # Bot selection tracking - stores which bots were selected for this message
+    selected_bots = Column(JSONB, nullable=True, default=list)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships

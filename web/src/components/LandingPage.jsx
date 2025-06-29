@@ -29,10 +29,16 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     if (!isAuthenticated || !query.trim()) return
     
     // Get clean message and selected bot IDs
-    const { cleanMessage, botIds } = getBotSelectionData(query.trim())
+    const { cleanMessage, botIds, selectedBots } = getBotSelectionData(query.trim())
     
     // Call the parent function to switch to chat mode and start the search
-    onSearch(cleanMessage || query.trim(), { bot_ids: botIds })
+    onSearch(cleanMessage || query.trim(), { 
+      bot_ids: botIds,
+      selectedBots: selectedBots  // Also pass bot objects for display
+    })
+    
+    // Clear the query input on landing page
+    setQuery('')
     
     // Close suggestions and clear selections
     closeSuggestions()
@@ -133,12 +139,24 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
 
               {/* Search Box with Bot Auto-complete */}
               <form onSubmit={handleSubmit} className="mb-6">
-                {/* Selected Bots Chips */}
-                <SelectedBotsChips 
-                  selectedBots={selectedBots} 
-                  onRemoveBot={removeSelectedBot}
-                  className="justify-center" // Center the chips on landing page
-                />
+                {/* Selected Bots Chips with Clear Button */}
+                {selectedBots.length > 0 && (
+                  <div className="flex items-center justify-center mb-4">
+                    <div className="flex items-center space-x-4">
+                      <SelectedBotsChips 
+                        selectedBots={selectedBots} 
+                        onRemoveBot={removeSelectedBot}
+                        className="justify-center" // Center the chips on landing page
+                      />
+                      <button
+                        onClick={clearSelectedBots}
+                        className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        Clear Bots
+                      </button>
+                    </div>
+                  </div>
+                )}
                 
                 <div className="relative">
                   <input

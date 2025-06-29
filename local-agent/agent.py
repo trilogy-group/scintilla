@@ -33,6 +33,14 @@ class AgentConfig(BaseModel):
     mcp_servers_config: str = "mcp_servers.yaml"
     log_level: str = "INFO"
     docker_timeout: int = 30
+    
+    # Retry and reliability configuration
+    max_retry_attempts: int = 5
+    initial_retry_delay: float = 1.0
+    retry_backoff_multiplier: float = 2.0
+    max_retry_delay: float = 60.0
+    health_check_interval: float = 30.0
+    connection_timeout: float = 10.0
 
 class MCPServerConfig(BaseModel):
     """MCP Server configuration"""
@@ -288,6 +296,13 @@ class ScintillaLocalAgent:
         self.task_queue = asyncio.Queue()
         self.running = False
         self.session = None
+        
+        # Connection state tracking
+        self.is_registered = False
+        self.is_connected = False
+        self.consecutive_failures = 0
+        self.last_successful_poll = None
+        self.last_registration_attempt = None
         
         # Configuration paths
         self.config_path = Path(__file__).parent / "config.yaml"
@@ -548,6 +563,120 @@ class ScintillaLocalAgent:
         except Exception as e:
             self.logger.error(f"Result submission error: {e}")
             return False
+    
+    def _calculate_retry_delay(self, attempt: int) -> float:
+        """Calculate retry delay with exponential backoff"""
+        delay = self.config.initial_retry_delay * (self.config.retry_backoff_multiplier ** attempt)
+        return min(delay, self.config.max_retry_delay)
+    
+    async def _retry_with_backoff(self, operation_name: str, operation_func, *args, **kwargs):
+        """Execute an operation with exponential backoff retry logic"""
+        for attempt in range(self.config.max_retry_attempts):
+            try:
+                result = await operation_func(*args, **kwargs)
+                if result:  # Success
+                    if attempt > 0:
+                        self.logger.info(f"🔄 {operation_name} succeeded after {attempt + 1} attempts")
+                    self.consecutive_failures = 0
+                    return result
+            except Exception as e:
+                self.logger.warning(f"⚠️ {operation_name} attempt {attempt + 1} failed: {e}")
+            
+            # If this wasn't the last attempt, wait before retrying
+            if attempt < self.config.max_retry_attempts - 1:
+                delay = self._calculate_retry_delay(attempt)
+                self.logger.info(f"⏳ Waiting {delay:.1f}s before retry {attempt + 2}/{self.config.max_retry_attempts}")
+                await asyncio.sleep(delay)
+        
+        # All attempts failed
+        self.consecutive_failures += 1
+        self.logger.error(f"❌ {operation_name} failed after {self.config.max_retry_attempts} attempts")
+        return False
+    
+    async def _register_with_retry(self) -> bool:
+        """Register with server with retry logic"""
+        self.logger.info("📡 Attempting registration with retry logic...")
+        
+        async def _do_registration():
+            return await self.register_with_server()
+        
+        success = await self._retry_with_backoff("Registration", _do_registration)
+        
+        if success:
+            self.is_registered = True
+            self.is_connected = True
+            self.last_registration_attempt = time.time()
+            self.logger.info("✅ Successfully registered with server")
+        else:
+            self.is_registered = False
+            self.is_connected = False
+            self.logger.error("❌ Failed to register with server after all retries")
+        
+        return success
+    
+    async def _check_server_health(self) -> bool:
+        """Check if server is responding"""
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.config.connection_timeout)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(f"{self.config.server_url}/health") as response:
+                    return response.status == 200
+        except Exception as e:
+            self.logger.debug(f"Health check failed: {e}")
+            return False
+    
+    async def _handle_connection_loss(self):
+        """Handle connection loss and attempt reconnection"""
+        self.is_connected = False
+        self.is_registered = False
+        
+        self.logger.warning("🔌 Connection lost to server, attempting reconnection...")
+        
+        # Wait for server to be healthy again
+        while self.running:
+            if await self._check_server_health():
+                self.logger.info("🔄 Server is healthy, attempting re-registration...")
+                
+                # Recreate session if needed
+                if not self.session or self.session.closed:
+                    if self.session:
+                        await self.session.close()
+                    timeout = aiohttp.ClientTimeout(total=self.config.connection_timeout)
+                    self.session = aiohttp.ClientSession(timeout=timeout)
+                
+                # Attempt re-registration
+                if await self._register_with_retry():
+                    self.logger.info("🎉 Successfully reconnected and re-registered!")
+                    break
+                else:
+                    self.logger.error("❌ Re-registration failed, will retry health check...")
+            
+            # Wait before next health check
+            await asyncio.sleep(self.config.health_check_interval)
+    
+    async def _poll_with_reliability(self) -> Optional[Dict[str, Any]]:
+        """Poll for work with reliability handling"""
+        try:
+            task = await self.poll_for_work()
+            
+            # Update connection state on successful poll
+            if task is not None or self.consecutive_failures == 0:
+                self.last_successful_poll = time.time()
+                if not self.is_connected:
+                    self.is_connected = True
+                    self.logger.info("🔗 Connection restored")
+            
+            return task
+            
+        except Exception as e:
+            self.consecutive_failures += 1
+            self.logger.warning(f"⚠️ Poll failed ({self.consecutive_failures} consecutive failures): {e}")
+            
+            # If we have too many consecutive failures, assume connection is lost
+            if self.consecutive_failures >= 3:
+                await self._handle_connection_loss()
+            
+            return None
             
     async def process_task(self, task: Dict[str, Any]) -> None:
         """Process a single task"""
@@ -593,29 +722,36 @@ class ScintillaLocalAgent:
         await self.submit_result(task_id, result)
         
     async def run_polling_loop(self) -> None:
-        """Main polling loop"""
-        self.logger.info("🚀 Starting polling loop...")
+        """Main polling loop with reliability features"""
+        self.logger.info("🚀 Starting reliable polling loop...")
         
         while self.running:
             try:
-                # Poll for work
-                task = await self.poll_for_work()
-                
-                if task:
-                    # Process the task
-                    await self.process_task(task)
+                # Only poll if we're registered and connected
+                if self.is_registered and self.is_connected:
+                    # Poll for work with reliability handling
+                    task = await self._poll_with_reliability()
+                    
+                    if task:
+                        # Process the task
+                        await self.process_task(task)
+                    else:
+                        # No work available, wait before next poll
+                        await asyncio.sleep(self.config.poll_interval)
                 else:
-                    # No work available, wait before next poll
-                    await asyncio.sleep(self.config.poll_interval)
+                    # Not connected, try to reconnect
+                    self.logger.info("🔄 Not connected, attempting reconnection...")
+                    await self._handle_connection_loss()
                     
             except Exception as e:
                 self.logger.error(f"Error in polling loop: {e}")
-                await asyncio.sleep(self.config.poll_interval)
+                # If we get an unexpected error, assume connection issues
+                await self._handle_connection_loss()
                 
-        self.logger.info("🛑 Polling loop stopped")
+        self.logger.info("🛑 Reliable polling loop stopped")
         
     async def start(self) -> None:
-        """Start the agent"""
+        """Start the agent with reliability features"""
         try:
             # Load configuration
             await self.load_config()
@@ -623,12 +759,13 @@ class ScintillaLocalAgent:
             # Load and start MCP servers
             await self._load_mcp_servers()
             
-            # Create HTTP session
-            self.session = aiohttp.ClientSession()
+            # Create HTTP session with timeout
+            timeout = aiohttp.ClientTimeout(total=self.config.connection_timeout)
+            self.session = aiohttp.ClientSession(timeout=timeout)
             
-            # Register with server
-            if not await self.register_with_server():
-                raise Exception("Failed to register with server")
+            # Register with server using retry logic
+            if not await self._register_with_retry():
+                raise Exception("Failed to register with server after all retries")
                 
             # Start polling
             self.running = True

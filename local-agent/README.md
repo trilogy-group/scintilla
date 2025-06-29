@@ -10,6 +10,28 @@ A local agent that manages Docker-based MCP (Model Context Protocol) servers and
 - 🏗️ **Tool Discovery**: Automatically discovers and registers tools from MCP servers
 - 🔧 **Atlassian Integration**: Pre-configured for [mcp-atlassian](https://github.com/sooperset/mcp-atlassian) server
 - 📋 **Flexible Configuration**: YAML-based configuration for easy customization
+- 🛡️ **Reliability Features**: Automatic retry, health checking, and reconnection handling
+
+## Reliability & Resilience
+
+The local agent includes robust reliability features to handle real-world deployment scenarios:
+
+### 🔄 Automatic Retry with Exponential Backoff
+- Failed operations are automatically retried with increasing delays
+- Prevents overwhelming a recovering server with rapid retry attempts
+- Configurable retry limits and timing
+
+### 🏥 Health Checking & Auto-Reconnection
+- Continuously monitors server availability when disconnected
+- Automatically re-registers when server restarts
+- Maintains state consistency across reconnections
+
+### 🔗 Connection State Management
+- Tracks connection status and registration state
+- Gracefully handles temporary network interruptions
+- Distinguishes between temporary failures and persistent issues
+
+**For detailed information about reliability features, see [RELIABILITY.md](RELIABILITY.md)**
 
 ## Quick Start
 
