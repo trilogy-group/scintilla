@@ -3,6 +3,7 @@ import { Search, Send, Settings, User, BookOpen, Github, Code, Database, Message
 import { useScintilla } from './hooks/useScintilla'
 import { useAuth } from './hooks/useAuth'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips, MessageBotsUsed } from './hooks/useBotAutoComplete.jsx'
+import { useSourceSelector, SourceSelectorDropdown, SelectedSourcesChips } from './hooks/useSourceSelector.jsx'
 import CitationRenderer from './components/CitationRenderer'
 import { SourcesManager } from './components/SourcesManager'
 import { BotsManager } from './components/BotsManager'
@@ -56,7 +57,21 @@ function App() {
     loadBots: loadBotsForAutoComplete,
     addSelectedBot
   } = useBotAutoComplete()
-  
+
+  // Source selector functionality
+  const {
+    availableSources,
+    selectedSources,
+    showSourceSelector,
+    loading: sourcesLoading,
+    toggleSourceSelection,
+    isSourceSelected,
+    clearSelectedSources,
+    getSelectedSourceIds,
+    toggleSelector,
+    closeSelector
+  } = useSourceSelector()
+
   const { 
     messages, 
     isLoading, 
@@ -230,6 +245,7 @@ function App() {
       stream: true,
       use_user_sources: true,
       bot_ids: botIds,
+      selected_sources: getSelectedSourceIds(),
       selectedBots: selectedBots  // Pass bot information for display
     })
   }
@@ -999,21 +1015,55 @@ function App() {
 
               {/* Input Area */}
               <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-                {/* Selected Bots Chips with Clear Button */}
-                {selectedBots.length > 0 && (
-                  <div className="flex items-center justify-between mb-3">
-                    <SelectedBotsChips 
-                      selectedBots={selectedBots} 
-                      onRemoveBot={removeSelectedBot}
-                    />
-                    <button
-                      onClick={clearSelectedBots}
-                      className="ml-3 px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                    >
-                      Clear Bots
-                    </button>
+                {/* Source Selector */}
+                <div className="mb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      {/* Source Selector Button */}
+                      <div className="relative">
+                        <button
+                          onClick={toggleSelector}
+                          className="flex items-center space-x-2 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                        >
+                          <Filter className="h-4 w-4" />
+                          <span>Sources ({selectedSources.length})</span>
+                        </button>
+
+                        {/* Source Selector Dropdown */}
+                        <SourceSelectorDropdown
+                          showSourceSelector={showSourceSelector}
+                          availableSources={availableSources}
+                          selectedSources={selectedSources}
+                          onToggleSource={toggleSourceSelection}
+                          onClose={closeSelector}
+                          loading={sourcesLoading}
+                        />
+                      </div>
+
+                      {/* Selected Sources Chips */}
+                      <SelectedSourcesChips
+                        selectedSources={selectedSources}
+                        onToggleSource={toggleSourceSelection}
+                      />
+
+                      {/* Selected Bots Chips */}
+                      <SelectedBotsChips 
+                        selectedBots={selectedBots} 
+                        onRemoveBot={removeSelectedBot}
+                      />
+                    </div>
+
+                    {/* Clear Sources Button */}
+                    {selectedSources.length > 0 && (
+                      <button
+                        onClick={clearSelectedSources}
+                        className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        Clear Sources
+                      </button>
+                    )}
                   </div>
-                )}
+                </div>
                 
                 <form onSubmit={handleSubmit} className="flex space-x-4">
                   <div className="flex-1 relative">

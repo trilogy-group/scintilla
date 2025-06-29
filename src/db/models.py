@@ -63,6 +63,9 @@ class Source(Base):
     owner_bot_id = Column(UUID(as_uuid=True), ForeignKey("bots.bot_id"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     
+    # Public access - if True, source is available to all users
+    is_public = Column(Boolean, default=False, nullable=False)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     

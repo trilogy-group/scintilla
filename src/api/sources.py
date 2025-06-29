@@ -81,6 +81,7 @@ async def create_source(
             auth_headers={},  # Will be populated by credentials
             owner_user_id=user.user_id,
             is_active=True,
+            is_public=source_data.is_public or False,
             created_at=now,
             updated_at=now
         )
@@ -127,6 +128,7 @@ async def create_source(
             server_url=source_data.server_url,
             owner_user_id=user.user_id,
             owner_bot_id=None,
+            is_public=source_data.is_public or False,
             is_active=True,
             created_at=now,
             updated_at=now,
@@ -173,6 +175,7 @@ async def list_user_sources(
         source_owner_user_id = source.owner_user_id
         source_owner_bot_id = source.owner_bot_id
         source_is_active = source.is_active
+        source_is_public = source.is_public
         source_created_at = source.created_at
         source_updated_at = source.updated_at
         source_tools_cache_status = source.tools_cache_status
@@ -200,6 +203,7 @@ async def list_user_sources(
             server_url=source_server_url,
             owner_user_id=source_owner_user_id,
             owner_bot_id=source_owner_bot_id,
+            is_public=source_is_public,
             is_active=source_is_active,
             created_at=source_created_at,
             updated_at=source_updated_at,
@@ -209,6 +213,126 @@ async def list_user_sources(
             cached_tool_count=cached_tool_count,
             cached_tools=cached_tools
         ))
+    
+    return source_responses
+
+
+@router.get("/available-for-query", response_model=List[SourceResponse])
+async def get_available_sources_for_query(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """Get all sources available for query selection (owned + shared + public)"""
+    
+    # Get user's own sources
+    user_sources_query = select(Source).where(
+        Source.owner_user_id == user.user_id,
+        Source.is_active.is_(True)
+    )
+    
+    # Get public sources (not owned by current user)
+    public_sources_query = select(Source).where(
+        Source.is_public.is_(True),
+        Source.is_active.is_(True),
+        Source.owner_user_id != user.user_id  # Exclude user's own public sources (already included above)
+    )
+    
+    # Get sources shared with user
+    shared_sources_query = (
+        select(Source)
+        .join(SourceShare, Source.source_id == SourceShare.source_id)
+        .where(
+            SourceShare.shared_with_user_id == user.user_id,
+            Source.is_active.is_(True)
+        )
+    )
+    
+    # Execute all queries
+    user_sources_result = await db.execute(user_sources_query)
+    public_sources_result = await db.execute(public_sources_query)
+    shared_sources_result = await db.execute(shared_sources_query)
+    
+    user_sources = user_sources_result.scalars().all()
+    public_sources = public_sources_result.scalars().all()
+    shared_sources = shared_sources_result.scalars().all()
+    
+    # Combine and deduplicate sources
+    all_sources = {}
+    for source in list(user_sources) + list(public_sources) + list(shared_sources):
+        all_sources[source.source_id] = source
+    
+    source_responses = []
+    
+    for source in all_sources.values():
+        # Extract ALL source attributes early to avoid greenlet issues
+        source_id = source.source_id
+        source_name = source.name
+        source_description = source.description
+        source_instructions = source.instructions
+        source_server_url = source.server_url
+        source_owner_user_id = source.owner_user_id
+        source_owner_bot_id = source.owner_bot_id
+        source_is_active = source.is_active
+        source_is_public = source.is_public
+        source_created_at = source.created_at
+        source_updated_at = source.updated_at
+        source_tools_cache_status = source.tools_cache_status
+        source_tools_last_cached_at = source.tools_last_cached_at
+        source_tools_cache_error = source.tools_cache_error
+        
+        # Determine owner type and sharing status
+        owner_type = None
+        is_shared_with_user = False
+        
+        if source_owner_user_id == user.user_id:
+            owner_type = "user"
+            is_shared_with_user = False
+        elif source_owner_bot_id:
+            owner_type = "bot"
+            is_shared_with_user = False
+        elif source_is_public:
+            owner_type = "user"  # Public sources are still owned by users
+            is_shared_with_user = False  # Public access, not personal sharing
+        else:
+            owner_type = "user"  # Shared by another user
+            is_shared_with_user = True
+        
+        # Get cached tools for this source
+        cached_tools = []
+        cached_tool_count = 0
+        
+        try:
+            tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
+            if tools_data:
+                cached_tools = [tool["name"] for tool in tools_data]
+                cached_tool_count = len(cached_tools)
+        except Exception as e:
+            logger.warning("Failed to get cached tools for source", 
+                          source_id=source_id, error=str(e))
+        
+        source_responses.append(SourceResponse(
+            source_id=source_id,
+            name=source_name,
+            description=source_description,
+            instructions=source_instructions,
+            server_url=source_server_url,
+            owner_user_id=source_owner_user_id,
+            owner_bot_id=source_owner_bot_id,
+            owner_type=owner_type,
+            is_shared_with_user=is_shared_with_user,
+            is_public=source_is_public,
+            is_active=source_is_active,
+            created_at=source_created_at,
+            updated_at=source_updated_at,
+            tools_cache_status=source_tools_cache_status,
+            tools_last_cached_at=source_tools_last_cached_at,
+            tools_cache_error=source_tools_cache_error,
+            cached_tool_count=cached_tool_count,
+            cached_tools=cached_tools
+        ))
+    
+    # Sort by name for consistent ordering
+    source_responses.sort(key=lambda s: s.name.lower())
     
     return source_responses
 
@@ -244,6 +368,7 @@ async def get_source(
     source_owner_user_id = source.owner_user_id
     source_owner_bot_id = source.owner_bot_id
     source_is_active = source.is_active
+    source_is_public = source.is_public
     source_created_at = source.created_at
     source_updated_at = source.updated_at
     source_tools_cache_status = source.tools_cache_status
@@ -271,6 +396,7 @@ async def get_source(
         server_url=source_server_url,
         owner_user_id=source_owner_user_id,
         owner_bot_id=source_owner_bot_id,
+        is_public=source_is_public,
         is_active=source_is_active,
         created_at=source_created_at,
         updated_at=source_updated_at,

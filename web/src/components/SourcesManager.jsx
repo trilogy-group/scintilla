@@ -33,7 +33,8 @@ export const SourcesManager = () => {
     server_url: '',
     auth_method: 'headers', // 'headers' or 'url_embedded'
     auth_headers: '',
-    credentials: {}
+    credentials: {},
+    is_public: false
   })
 
   // Authentication method configurations
@@ -87,7 +88,8 @@ export const SourcesManager = () => {
       server_url: '',
       auth_method: 'headers',
       auth_headers: '',
-      credentials: {}
+      credentials: {},
+      is_public: false
     })
   }
 
@@ -99,6 +101,7 @@ export const SourcesManager = () => {
         description: formData.description,
         instructions: formData.instructions,
         server_url: formData.server_url,
+        is_public: formData.is_public || false,
         credentials: {}
       }
 
@@ -230,10 +233,10 @@ export const SourcesManager = () => {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Personal Sources
+            Sources
           </h2>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Your individual MCP connections (separate from bot sources)
+            Manage your sources - create personal ones, access shared sources, and use public sources
           </p>
         </div>
         <button
@@ -366,6 +369,23 @@ export const SourcesManager = () => {
                 placeholder="Optional instructions for this source"
               />
             </div>
+
+            {/* Public Access Checkbox */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="is_public"
+                checked={formData.is_public || false}
+                onChange={(e) => setFormData({...formData, is_public: e.target.checked})}
+                className="rounded border-gray-300 text-scintilla-600 focus:ring-scintilla-500"
+              />
+              <label htmlFor="is_public" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Make this source public
+              </label>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
+              Public sources can be used by all users. Keep unchecked for personal sources only.
+            </p>
 
             <div className="flex items-center space-x-3 pt-4">
               <button

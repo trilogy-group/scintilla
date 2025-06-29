@@ -205,6 +205,10 @@ class APIService {
     })
   }
 
+  async getAvailableSourcesForQuery() {
+    return this.request('/api/sources/available-for-query')
+  }
+
   // Bots endpoints
   async getBots() {
     return this.request('/api/bots')

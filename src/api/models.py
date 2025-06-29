@@ -178,6 +178,7 @@ class SourceCreate(BaseModel):
     credentials: Dict[str, Any] = Field(..., description="Credential fields - can contain auth_headers object or other auth data")
     description: Optional[str] = None
     instructions: Optional[str] = None  # Instructions for bot usage
+    is_public: Optional[bool] = Field(default=False, description="Whether source is available to all users")
     shared_with_users: Optional[List[UUID]] = Field(default=[], description="User IDs to share this source with")
 
 
@@ -192,6 +193,7 @@ class SourceResponse(BaseModel):
     owner_bot_id: Optional[UUID]
     owner_type: Optional[str] = None  # "user", "bot", or None
     is_shared_with_user: Optional[bool] = None  # Whether current user has access via sharing
+    is_public: bool = False  # Whether source is available to all users
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime]

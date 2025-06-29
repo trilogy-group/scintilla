@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Search, ArrowRight } from 'lucide-react'
+import { Search, ArrowRight, Filter } from 'lucide-react'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from '../hooks/useBotAutoComplete.jsx'
+import { useSourceSelector, SourceSelectorDropdown, SelectedSourcesChips } from '../hooks/useSourceSelector.jsx'
 import GoogleAuth from './GoogleAuth'
 
 const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUser = null, onAuthChange }) => {
@@ -22,7 +23,19 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     closeSuggestions
   } = useBotAutoComplete()
 
-
+  // Source selector functionality
+  const {
+    availableSources,
+    selectedSources,
+    showSourceSelector,
+    loading: sourcesLoading,
+    toggleSourceSelection,
+    isSourceSelected,
+    clearSelectedSources,
+    getSelectedSourceIds,
+    toggleSelector,
+    closeSelector
+  } = useSourceSelector()
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -34,6 +47,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     // Call the parent function to switch to chat mode and start the search
     onSearch(cleanMessage || query.trim(), { 
       bot_ids: botIds,
+      selected_sources: getSelectedSourceIds(),
       selectedBots: selectedBots  // Also pass bot objects for display
     })
     
@@ -42,6 +56,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     
     // Close suggestions and clear selections
     closeSuggestions()
+    closeSelector()
   }
 
   const handleInputChangeWrapper = (e) => {
@@ -139,24 +154,55 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
 
               {/* Search Box with Bot Auto-complete */}
               <form onSubmit={handleSubmit} className="mb-6">
-                {/* Selected Bots Chips with Clear Button */}
-                {selectedBots.length > 0 && (
-                  <div className="flex items-center justify-center mb-4">
-                    <div className="flex items-center space-x-4">
-                      <SelectedBotsChips 
-                        selectedBots={selectedBots} 
-                        onRemoveBot={removeSelectedBot}
-                        className="justify-center" // Center the chips on landing page
-                      />
+                {/* Combined Sources and Bots Controls */}
+                <div className="flex items-center justify-center mb-4">
+                  <div className="flex items-center space-x-4">
+                    {/* Source Selector Button */}
+                    <div className="relative">
                       <button
-                        onClick={clearSelectedBots}
+                        onClick={toggleSelector}
+                        className="flex items-center space-x-2 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        <Filter className="h-4 w-4" />
+                        <span>Sources ({selectedSources.length})</span>
+                      </button>
+
+                      {/* Source Selector Dropdown */}
+                      <SourceSelectorDropdown
+                        showSourceSelector={showSourceSelector}
+                        availableSources={availableSources}
+                        selectedSources={selectedSources}
+                        onToggleSource={toggleSourceSelection}
+                        onClose={closeSelector}
+                        loading={sourcesLoading}
+                      />
+                    </div>
+
+                    {/* Selected Sources Chips */}
+                    <SelectedSourcesChips
+                      selectedSources={selectedSources}
+                      onToggleSource={toggleSourceSelection}
+                      className="justify-center"
+                    />
+
+                    {/* Selected Bots Chips */}
+                    <SelectedBotsChips 
+                      selectedBots={selectedBots} 
+                      onRemoveBot={removeSelectedBot}
+                      className="justify-center"
+                    />
+
+                    {/* Clear Sources Button */}
+                    {selectedSources.length > 0 && (
+                      <button
+                        onClick={clearSelectedSources}
                         className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
-                        Clear Bots
+                        Clear Sources
                       </button>
-                    </div>
+                    )}
                   </div>
-                )}
+                </div>
                 
                 <div className="relative">
                   <input

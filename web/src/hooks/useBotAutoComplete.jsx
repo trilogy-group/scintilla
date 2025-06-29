@@ -221,7 +221,7 @@ export const SelectedBotsChips = ({ selectedBots, onRemoveBot, className = "" })
   if (selectedBots.length === 0) return null
 
   return (
-    <div className={`flex flex-wrap gap-2 mb-3 ${className}`}>
+    <div className={`flex flex-wrap gap-2 ${className}`}>
       {selectedBots.map((bot) => (
         <div
           key={bot.bot_id}
