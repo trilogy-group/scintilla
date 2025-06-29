@@ -370,26 +370,13 @@ export const BotsManager = () => {
         name: botDetails.name,
         description: botDetails.description || '',
         sourceConfigs: botDetails.source_associations?.map(assoc => {
-          // Determine the correct source configuration type based on source_type
-          if (assoc.source_type === 'bot_owned') {
-            // Bot-owned sources should be treated as 'create' type with the actual source name
-            return {
-              type: 'create',
-              data: {
-                source_id: assoc.source_id,
-                name: assoc.source_name,
-                custom_instructions: assoc.custom_instructions || ''
-              }
-            }
-          } else {
-            // User-owned or shared sources are 'reference' type
-            return {
-              type: 'reference',
-              data: {
-                source_id: assoc.source_id,
-                name: assoc.source_name, // Store the name directly from association
-                custom_instructions: assoc.custom_instructions || ''
-              }
+          // ALL source associations should be treated as 'reference' type
+          // since we don't have the full source data (server_url, credentials) needed for 'create' type
+          return {
+            type: 'reference',
+            data: {
+              source_id: assoc.source_id,
+              custom_instructions: assoc.custom_instructions || ''
             }
           }
         }) || [],
