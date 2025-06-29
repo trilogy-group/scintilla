@@ -32,6 +32,11 @@ export const useBotAutoComplete = () => {
     }
   }, [])
 
+  // Load bots on mount and when auth status changes
+  useEffect(() => {
+    loadBots()
+  }, [loadBots])
+
   // Close suggestions when clicking outside (but not on the dropdown itself)
   useEffect(() => {
     const handleClickOutside = (event) => {

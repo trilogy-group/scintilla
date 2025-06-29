@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Search, ArrowRight } from 'lucide-react'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips } from '../hooks/useBotAutoComplete.jsx'
 import GoogleAuth from './GoogleAuth'
@@ -19,8 +19,16 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     handleKeyDown,
     removeSelectedBot,
     clearSelectedBots,
-    closeSuggestions
+    closeSuggestions,
+    loadBots
   } = useBotAutoComplete()
+
+  // Reload bots when authentication status changes
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadBots()
+    }
+  }, [isAuthenticated, loadBots])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -54,8 +62,6 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
   const handleSelectBot = (bot) => {
     selectBotSuggestion(bot, query, setQuery)
   }
-
-
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex flex-col">
