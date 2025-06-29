@@ -6,7 +6,33 @@ import { ExternalLink } from 'lucide-react'
 /**
  * Component for rendering citation numbers [1], [2], etc.
  */
-export const CitationLink = ({ number, onClick, className = "" }) => {
+export const CitationLink = ({ number, onClick, className = "", sources = [] }) => {
+  // Get the corresponding source URL for this citation number
+  const source = sources && sources[number - 1]; // sources is 0-indexed, numbers are 1-indexed
+  const sourceUrl = source?.url;
+  
+  if (sourceUrl) {
+    // Make citation clickable to external URL
+    return (
+      <a
+        href={sourceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`citation-link inline-flex items-center text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 py-0.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors ${className}`}
+        title={`Go to ${source.title}`}
+        onClick={(e) => {
+          // Also trigger the scroll behavior
+          e.preventDefault();
+          window.open(sourceUrl, '_blank');
+          onClick?.(number);
+        }}
+      >
+        [{number}]
+      </a>
+    );
+  }
+  
+  // Fallback to non-clickable if no URL
   return (
     <span
       className={`citation-link inline-flex items-center text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 py-0.5 rounded ${className}`}
@@ -197,6 +223,7 @@ const processCitations = (content, sources, onCitationClick) => {
         number={citationNumber}
         onClick={onCitationClick}
         className="mx-0.5"
+        sources={sources}
       />
     )
 

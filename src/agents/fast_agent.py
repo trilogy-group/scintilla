@@ -540,9 +540,12 @@ IMPORTANT CITATION INSTRUCTIONS:
 1. Use [1], [2], [3] format when citing specific information from sources
 2. Only cite when directly referencing information from a source
 3. Match citation numbers to the source list above
-4. Mention ticket IDs, PR numbers, or document names as plain text
-5. Be specific about which source information comes from
-6. Focus on accuracy - formatting will be validated and fixed automatically
+4. Keep ticket IDs as plain text (like PDR-148559, not links)
+5. Add citations for EACH ticket you mention - if you mention 5 tickets, use [1], [2], [3], [4], [5]
+6. Citations should appear in the order of the source list above
+7. Focus on accuracy - formatting will be validated and fixed automatically
+
+EXAMPLE: "The ticket PDR-148559 has status 'Closed' [1] and PDR-148558 also has status 'Closed' [2]."
 
 Please provide your response with proper citations based on the tool results."""
                 
@@ -566,8 +569,8 @@ Please provide your response with proper citations based on the tool results."""
                     llm, final_content, citation_guidance, all_tool_metadata
                 )
             
-            # Minimal post-processing for clickable links (LLM should handle most of this now)
-            final_content = self._create_clickable_links(final_content, all_tool_metadata)
+            # SKIP post-processing clickable links - we want only [1], [2], [3] citations to be clickable
+            # final_content = self._create_clickable_links(final_content, all_tool_metadata)
             
             # Build sources list from metadata
             sources = self._build_sources_from_metadata(all_tool_metadata, final_content)
@@ -879,7 +882,8 @@ Please provide your response with proper citations based on the tool results."""
 2. **URL Formatting**: Fix any malformed URLs and markdown links
 3. **No Nested Links**: Remove nested or malformed markdown like [[text](url)](url)
 4. **Citation Usage**: Add proper [1], [2], [3] citations when referencing specific source information
-5. **Consistency**: Information matches the cited sources
+5. **Plain Ticket IDs**: Keep ticket IDs as plain text (PDR-148559), remove any markdown links around them
+6. **Citation Order**: Ensure citations appear in order [1], [2], [3], [4], [5] matching the source list
 
 AVAILABLE SOURCES:
 {citation_guidance}
@@ -893,9 +897,10 @@ RESPONSE TO VALIDATE:
 VALIDATION RULES:
 - Fix any malformed markdown links (nested links, broken syntax)
 - Add [1], [2], [3] citations when mentioning specific information from sources
-- Keep ticket IDs as plain text (like TST-28) - links will be added automatically
+- Convert clickable ticket IDs to plain text: [PDR-148559](url) -> PDR-148559
 - Remove nested links like [[text](url)](url)
-- Ensure citations match the source numbers above
+- Ensure citations match the source numbers above and appear in order
+- If mentioning 5 tickets, should have [1], [2], [3], [4], [5] citations
 - Keep the same information, just improve citations and fix formatting
 - Do not add your own sources section
 
