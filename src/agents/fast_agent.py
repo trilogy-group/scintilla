@@ -620,36 +620,81 @@ Please provide your response with proper citations based on the tool results."""
             if not any([metadata.get('urls'), metadata.get('titles'), metadata.get('identifiers')]):
                 continue
             
-            # Build citation entry
-            citation_parts = []
-            
-            # Use first title if available
-            if metadata.get('titles'):
-                citation_parts.append(f"[{source_num}] {metadata['titles'][0]}")
+            # Special handling for Jira results with multiple tickets
+            if (metadata.get('source_type') == 'jira' and 
+                metadata.get('identifiers', {}).get('tickets') and
+                len(metadata.get('urls', [])) > 1):
+                
+                # Create separate citation entry for each ticket
+                tickets = metadata['identifiers']['tickets'].split(',')
+                urls = metadata.get('urls', [])
+                titles = metadata.get('titles', [])
+                
+                for i, ticket in enumerate(tickets):
+                    ticket = ticket.strip()
+                    if not ticket:
+                        continue
+                    
+                    # Use corresponding URL if available
+                    ticket_url = None
+                    for url in urls:
+                        if f'/browse/{ticket}' in url:
+                            ticket_url = url
+                            break
+                    
+                    # Find title for this ticket
+                    ticket_title = None
+                    for title in titles:
+                        if ticket in title:
+                            ticket_title = title
+                            break
+                    
+                    if not ticket_title:
+                        ticket_title = f"{ticket}: Jira Issue"
+                    
+                    # Build citation entry for this ticket
+                    citation_parts = [f"[{source_num}] {ticket_title}"]
+                    
+                    if ticket_url:
+                        citation_parts.append(f"   URL: {ticket_url}")
+                    
+                    citation_parts.append(f"   Ticket: {ticket}")
+                    citation_parts.append(f"   Type: jira")
+                    
+                    citation_lines.extend(citation_parts)
+                    citation_lines.append("")  # Empty line between sources
+                    source_num += 1
             else:
-                citation_parts.append(f"[{source_num}] {tool_name} results")
-            
-            # Add primary URL if available
-            if metadata.get('urls'):
-                citation_parts.append(f"   URL: {metadata['urls'][0]}")
-            
-            # Add identifiers
-            if metadata.get('identifiers'):
-                ids = metadata['identifiers']
-                if ids.get('primary_ticket'):
-                    citation_parts.append(f"   Ticket: {ids['primary_ticket']}")
-                if ids.get('pr_number'):
-                    citation_parts.append(f"   PR: #{ids['pr_number']}")
-                if ids.get('issue_number'):
-                    citation_parts.append(f"   Issue: #{ids['issue_number']}")
-            
-            # Add source type
-            if metadata.get('source_type'):
-                citation_parts.append(f"   Type: {metadata['source_type']}")
-            
-            citation_lines.extend(citation_parts)
-            citation_lines.append("")  # Empty line between sources
-            source_num += 1
+                # Standard single-source handling
+                citation_parts = []
+                
+                # Use first title if available
+                if metadata.get('titles'):
+                    citation_parts.append(f"[{source_num}] {metadata['titles'][0]}")
+                else:
+                    citation_parts.append(f"[{source_num}] {tool_name} results")
+                
+                # Add primary URL if available
+                if metadata.get('urls'):
+                    citation_parts.append(f"   URL: {metadata['urls'][0]}")
+                
+                # Add identifiers
+                if metadata.get('identifiers'):
+                    ids = metadata['identifiers']
+                    if ids.get('primary_ticket'):
+                        citation_parts.append(f"   Ticket: {ids['primary_ticket']}")
+                    if ids.get('pr_number'):
+                        citation_parts.append(f"   PR: #{ids['pr_number']}")
+                    if ids.get('issue_number'):
+                        citation_parts.append(f"   Issue: #{ids['issue_number']}")
+                
+                # Add source type
+                if metadata.get('source_type'):
+                    citation_parts.append(f"   Type: {metadata['source_type']}")
+                
+                citation_lines.extend(citation_parts)
+                citation_lines.append("")  # Empty line between sources
+                source_num += 1
         
         return "\n".join(citation_lines)
     
@@ -734,21 +779,70 @@ Please provide your response with proper citations based on the tool results."""
             if not any([metadata.get('urls'), metadata.get('titles'), metadata.get('identifiers')]):
                 continue
             
-            # Only include if this source number is referenced
-            if source_num in referenced_citations:
-                source = {
-                    "title": metadata['titles'][0] if metadata.get('titles') else f"{meta['tool_name']} results",
-                    "url": metadata['urls'][0] if metadata.get('urls') else None,
-                    "source_type": metadata.get('source_type', 'tool_result'),
-                    "snippet": metadata.get('snippet', '')[:300],
-                    "metadata": {
-                        "tool": meta['tool_name'],
-                        "identifiers": metadata.get('identifiers', {})
+            # Special handling for Jira results with multiple tickets
+            if (metadata.get('source_type') == 'jira' and 
+                metadata.get('identifiers', {}).get('tickets') and
+                len(metadata.get('urls', [])) > 1):
+                
+                # Create separate source entry for each ticket that's referenced
+                tickets = metadata['identifiers']['tickets'].split(',')
+                urls = metadata.get('urls', [])
+                titles = metadata.get('titles', [])
+                
+                for i, ticket in enumerate(tickets):
+                    ticket = ticket.strip()
+                    if not ticket:
+                        continue
+                    
+                    # Only include if this source number is referenced
+                    if source_num in referenced_citations:
+                        # Use corresponding URL if available
+                        ticket_url = None
+                        for url in urls:
+                            if f'/browse/{ticket}' in url:
+                                ticket_url = url
+                                break
+                        
+                        # Find title for this ticket
+                        ticket_title = None
+                        for title in titles:
+                            if ticket in title:
+                                ticket_title = title
+                                break
+                        
+                        if not ticket_title:
+                            ticket_title = f"{ticket}: Jira Issue"
+                        
+                        source = {
+                            "title": ticket_title,
+                            "url": ticket_url,
+                            "source_type": "jira",
+                            "snippet": metadata.get('snippet', '')[:300],
+                            "metadata": {
+                                "tool": meta['tool_name'],
+                                "identifiers": {"primary_ticket": ticket}
+                            }
+                        }
+                        sources.append(source)
+                    
+                    source_num += 1
+            else:
+                # Standard single-source handling
+                # Only include if this source number is referenced
+                if source_num in referenced_citations:
+                    source = {
+                        "title": metadata['titles'][0] if metadata.get('titles') else f"{meta['tool_name']} results",
+                        "url": metadata['urls'][0] if metadata.get('urls') else None,
+                        "source_type": metadata.get('source_type', 'tool_result'),
+                        "snippet": metadata.get('snippet', '')[:300],
+                        "metadata": {
+                            "tool": meta['tool_name'],
+                            "identifiers": metadata.get('identifiers', {})
+                        }
                     }
-                }
-                sources.append(source)
-            
-            source_num += 1
+                    sources.append(source)
+                
+                source_num += 1
         
         return sources
 
@@ -782,9 +876,9 @@ Please provide your response with proper citations based on the tool results."""
         validation_prompt = f"""You are a citation and formatting validator. Please review and fix the following response to ensure:
 
 1. **Citation Accuracy**: All [1], [2], [3] references correspond to the provided sources
-2. **URL Formatting**: All URLs and markdown links are properly formatted
-3. **Ticket Links**: All ticket IDs (like TST-28, LIA-32018) should be clickable markdown links
-4. **No Nested Links**: Ensure no nested or malformed markdown like [[text](url)](url)
+2. **URL Formatting**: Fix any malformed URLs and markdown links
+3. **No Nested Links**: Remove nested or malformed markdown like [[text](url)](url)
+4. **Citation Usage**: Add proper [1], [2], [3] citations when referencing specific source information
 5. **Consistency**: Information matches the cited sources
 
 AVAILABLE SOURCES:
@@ -797,11 +891,12 @@ RESPONSE TO VALIDATE:
 {final_content}
 
 VALIDATION RULES:
-- Fix any malformed markdown links
-- Ensure ticket IDs become clickable: TST-28 -> [TST-28](https://jira.dev.lithium.com/browse/TST-28)
-- Verify citations [1], [2] match the source list
-- Remove or fix any nested links like [[text](url)](url)
-- Keep the same information, just fix formatting and links
+- Fix any malformed markdown links (nested links, broken syntax)
+- Add [1], [2], [3] citations when mentioning specific information from sources
+- Keep ticket IDs as plain text (like TST-28) - links will be added automatically
+- Remove nested links like [[text](url)](url)
+- Ensure citations match the source numbers above
+- Keep the same information, just improve citations and fix formatting
 - Do not add your own sources section
 
 Please provide the corrected response:"""
