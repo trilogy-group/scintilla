@@ -14,14 +14,9 @@ export const useBotAutoComplete = () => {
   // Load bots for auto-complete
   const loadBots = useCallback(async () => {
     try {
-      // Only load if we have an auth token
-      const token = localStorage.getItem('scintilla_token')
-      if (!token) {
-        console.log('Skipping bot load - no auth token')
-        return
-      }
-      
+      console.log('Loading bots for auto-complete...')
       const data = await api.getBots()
+      console.log('Loaded bots:', data.length)
       setBots(data)
     } catch (error) {
       console.error('Failed to load bots:', error)
@@ -32,10 +27,12 @@ export const useBotAutoComplete = () => {
     }
   }, [])
 
-  // Load bots on mount and when auth status changes
+  // Auto-load bots when hook is first used (but don't reload if already loaded)
   useEffect(() => {
-    loadBots()
-  }, [loadBots])
+    if (bots.length === 0) {
+      loadBots()
+    }
+  }, [loadBots, bots.length])
 
   // Close suggestions when clicking outside (but not on the dropdown itself)
   useEffect(() => {
@@ -99,6 +96,8 @@ export const useBotAutoComplete = () => {
     const textBeforeCursor = value.substring(0, cursorPosition)
     const mentionMatch = textBeforeCursor.match(/@(\w*)$/)
     
+    console.log('Input change:', { value, cursorPosition, textBeforeCursor, mentionMatch, botsLength: bots.length })
+    
     if (mentionMatch) {
       const searchTerm = mentionMatch[1].toLowerCase()
       
@@ -109,6 +108,8 @@ export const useBotAutoComplete = () => {
       const filteredBots = availableBots.filter(bot => 
         bot.name.toLowerCase().includes(searchTerm)
       )
+      
+      console.log('@mention detected:', { searchTerm, availableBots: availableBots.length, filteredBots: filteredBots.length })
       
       setBotSuggestions(filteredBots)
       setMentionStartPos(mentionMatch.index)

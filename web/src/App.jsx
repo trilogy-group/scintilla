@@ -163,18 +163,24 @@ function App() {
   }
 
   useEffect(() => {
-    // Only load data when authenticated and not on landing page
-    if (!isAuthenticated || authLoading || showLanding) {
-      console.log('Skipping data load - authentication not ready or on landing page')
+    // Only load data when authenticated
+    if (!isAuthenticated || authLoading) {
+      console.log('Skipping data load - authentication not ready')
+      return
+    }
+    
+    // Always load bots for auto-complete (needed for landing page too)
+    loadBotsForAutoComplete()
+    
+    // Skip other data loading if on landing page
+    if (showLanding) {
+      console.log('On landing page - bots loaded, skipping other data')
       return
     }
     
     if (currentView === 'chat') {
       console.log('Chat view activated, loading conversations')
       loadConversations()
-      loadBotsForAutoComplete() // Refresh bots for auto-complete
-    } else if (currentView === 'bots') {
-      loadBotsForAutoComplete() // Refresh bots when viewing bots section
     }
   }, [currentView, loadBotsForAutoComplete, loadConversations, isAuthenticated, authLoading, showLanding])
 

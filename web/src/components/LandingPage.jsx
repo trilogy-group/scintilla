@@ -19,16 +19,10 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
     handleKeyDown,
     removeSelectedBot,
     clearSelectedBots,
-    closeSuggestions,
-    loadBots
+    closeSuggestions
   } = useBotAutoComplete()
 
-  // Reload bots when authentication status changes
-  useEffect(() => {
-    if (isAuthenticated) {
-      loadBots()
-    }
-  }, [isAuthenticated, loadBots])
+
 
   const handleSubmit = (e) => {
     e.preventDefault()
