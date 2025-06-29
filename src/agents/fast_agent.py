@@ -439,7 +439,10 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 
                 # Build messages for this iteration
                 messages = [SystemMessage(content=system_prompt)]
-                messages.extend(optimized_history)
+                
+                # Filter out any SystemMessage objects from history to avoid multiple system messages
+                filtered_history = [msg for msg in optimized_history if not isinstance(msg, SystemMessage)]
+                messages.extend(filtered_history)
                 messages.append(HumanMessage(content=message))
                 
                 # DO NOT add standalone tool results - this causes tool_use_id mismatches
@@ -518,13 +521,16 @@ Be intelligent about tool usage - search when information is needed, respond dir
             
             # Create final prompt with citation guidance - use conversation history instead of recreating tool results
             final_messages = [SystemMessage(content=system_prompt)]
-            final_messages.extend(optimized_history)
+            
+            # Filter out any SystemMessage objects from history to avoid multiple system messages
+            filtered_history = [msg for msg in optimized_history if not isinstance(msg, SystemMessage)]
+            final_messages.extend(filtered_history)
             final_messages.append(HumanMessage(content=message))
             
             # DO NOT add standalone tool results - this causes tool_use_id mismatches
             # The optimized_history already contains proper tool use/result pairs
             
-            # Add citation guidance as a system message
+            # Add citation guidance as a HumanMessage (not SystemMessage to avoid multiple system messages)
             if citation_guidance:
                 citation_prompt = f"""Based on the tool results above, here is information you can cite:
 
@@ -535,9 +541,11 @@ IMPORTANT CITATION INSTRUCTIONS:
 2. Only cite when directly referencing information from a source
 3. Match citation numbers to the source list above
 4. Make any ticket IDs, PR numbers, or document names clickable using markdown: [TICKET-123](url)
-5. Be specific about which source information comes from"""
+5. Be specific about which source information comes from
+
+Please provide your response with proper citations based on the tool results."""
                 
-                final_messages.append(SystemMessage(content=citation_prompt))
+                final_messages.append(HumanMessage(content=citation_prompt))
             
             # Get final response with proper citations
             final_response = await llm.ainvoke(final_messages)
