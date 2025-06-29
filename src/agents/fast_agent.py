@@ -6,6 +6,7 @@ Performance improvements:
 2. Uses centralized FastMCP service for all MCP operations
 3. Clean, maintainable code without duplication
 4. Proper conversation history and citations
+5. Context size management to prevent overflow
 """
 
 import uuid
@@ -23,7 +24,7 @@ import structlog
 
 from src.db.models import Message
 from src.agents.fast_mcp import FastMCPToolManager
-from src.agents.citations import CitationManager
+from src.agents.context_manager import ContextManager
 
 logger = structlog.get_logger()
 
@@ -49,6 +50,7 @@ class FastMCPAgent:
     - Load tools from database cache via FastMCPToolManager
     - Execute conversations with LLM + tool calling
     - Handle citations and streaming responses
+    - Manage context size to prevent overflow
     """
     
     def __init__(self):
@@ -57,7 +59,7 @@ class FastMCPAgent:
         self.tools: List[BaseTool] = []
         self.loaded_sources: List[str] = []
         self.source_instructions: Dict[str, str] = {}  # Map source name to instructions
-        self.citation_manager = CitationManager()
+        self.context_manager = None  # Will be initialized in query() based on model
         
         # Tool classification for local vs remote execution
         self.local_tools: List[BaseTool] = []
@@ -171,13 +173,13 @@ class FastMCPAgent:
         db: AsyncSession, 
         conversation_id: uuid.UUID
     ) -> List[Any]:
-        """Load conversation history for context"""
+        """Load conversation history for context (enhanced for better follow-up handling)"""
         try:
             result = await db.execute(
                 select(Message)
                 .where(Message.conversation_id == conversation_id)
                 .order_by(Message.created_at.desc())
-                .limit(CONVERSATION_HISTORY_LIMIT)
+                .limit(10)  # Increased from 6 to 10 for better context
             )
             messages = list(reversed(result.scalars().all()))
             
@@ -192,6 +194,7 @@ class FastMCPAgent:
                 elif role == "assistant":
                     langchain_messages.append(AIMessage(content=content))
             
+            logger.info(f"Loaded {len(langchain_messages)} conversation messages for context")
             return langchain_messages
             
         except Exception as e:
@@ -233,10 +236,16 @@ class FastMCPAgent:
         
         return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
+CONVERSATION CONTEXT: You maintain conversation context across messages. When users ask follow-up questions, they're building on previous responses. For example:
+- User: "What are the open tickets?"
+- Assistant: [provides ticket list]
+- User: "Is there documentation for these?" ← This refers to the tickets from previous response
+
 DECISION MATRIX - When to use tools vs respond directly:
 
 USE TOOLS when users ask about:
 - Specific information that needs searching ("What is Eloquens?", "How does X work?")
+- Follow-up questions requiring new searches ("documentation for these", "status of that project")
 - Technical documentation or implementation details
 - Recent updates, changes, or current status
 - Specific files, documents, or code repositories
@@ -245,8 +254,8 @@ USE TOOLS when users ask about:
 
 RESPOND DIRECTLY for:
 - General capability questions ("What can you do?", "What tools do you have?")
-- Simple explanations of basic concepts
-- Requests for help or guidance on using the system
+- Simple explanations of basic concepts you already covered
+- Clarifications about previous responses (only if no new search needed)
 - Meta questions about your functions
 
 AVAILABLE SEARCH TOOLS ({len(search_tools)} tools):
@@ -269,10 +278,11 @@ Be intelligent about tool usage - search when information is needed, respond dir
         self, 
         tool_calls: List[Dict], 
         message: str
-    ) -> Tuple[List[ToolMessage], List[Dict]]:
-        """Execute tool calls and return results (supports both local and remote tools)"""
+    ) -> Tuple[List[ToolMessage], List[Dict], List[Dict]]:
+        """Execute tool calls and return results with metadata for flexible citation handling"""
         tool_results = []
         tools_called = []
+        tool_metadata = []  # Collect metadata for citation processing
         
         for tool_call in tool_calls:
             tool_name = tool_call['name']
@@ -311,36 +321,29 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     logger.info(f"☁️ Executing remote tool: {tool_name}", args=tool_args)
                     tool_result = await target_tool.ainvoke(tool_args)
                 
-                # Enhanced source extraction using SimpleSourceExtractor
-                from src.agents.citations import SimpleSourceExtractor
-                logger.info(f"🔧 CALLING CITATION EXTRACTION: tool={tool_name}, result_length={len(str(tool_result))}")
-                extracted_sources = SimpleSourceExtractor.extract_sources(
+                # Process tool result to extract metadata (flexible approach)
+                from src.agents.tool_result_processor import ToolResultProcessor
+                metadata = ToolResultProcessor.process_tool_result(
                     tool_name=tool_name,
-                    result_data=tool_result,
+                    tool_result=tool_result,
                     tool_params=tool_args
                 )
-                logger.info(f"🔧 CITATION RESULT: {len(extracted_sources)} sources extracted")
                 
-                # Add extracted sources to citation manager
-                if extracted_sources:
-                    self.citation_manager.add_sources(extracted_sources)
-                else:
-                    # Check if this is a failed tool call - if so, don't add fallback source
-                    result_str = str(tool_result)
-                    if len(result_str.strip()) < 50 or "Error calling tool" in result_str:
-                        logger.info(f"🚫 SKIPPING FALLBACK SOURCE for failed tool call: {tool_name}")
-                    else:
-                        # Only add fallback for genuine extraction failures (not failed tool calls)
-                        from src.agents.citations import Source
-                        source = Source(
-                            title=f"{tool_name} result",
-                            url="",
-                            source_type="mcp_tool",
-                            snippet=result_str[:300],
-                            metadata={"tool": tool_name, "arguments": tool_args}
-                        )
-                        self.citation_manager.add_sources([source])
-                        logger.info(f"📎 ADDED FALLBACK SOURCE for {tool_name}")
+                # Store metadata for later citation processing
+                tool_metadata.append({
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                    "metadata": metadata.to_dict(),
+                    "raw_result": str(tool_result)
+                })
+                
+                logger.info(
+                    f"📊 Tool metadata extracted",
+                    tool=tool_name,
+                    urls=len(metadata.urls),
+                    titles=len(metadata.titles),
+                    identifiers=list(metadata.identifiers.keys())
+                )
                 
                 tools_called.append({
                     "tool": tool_name,
@@ -370,7 +373,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 )
                 tool_results.append(tool_message)
         
-        return tool_results, tools_called
+        return tool_results, tools_called, tool_metadata
     
     async def query(
         self,
@@ -380,7 +383,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
         conversation_id: Optional[uuid.UUID] = None,
         db_session: Optional[AsyncSession] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Execute query with streaming response"""
+        """Execute query with streaming response and context size management"""
         query_start = time.time()
         
         # Validate tools available
@@ -397,36 +400,65 @@ Be intelligent about tool usage - search when information is needed, respond dir
             # Initialize components
             llm = self._create_llm(llm_provider, llm_model)
             llm_with_tools = llm.bind_tools(search_tools)
-            system_prompt = self._create_system_prompt(search_tools)
             
-            # Clear citations for new query
-            self.citation_manager.clear()
+            # Initialize context manager for this query
+            self.context_manager = ContextManager(llm_model)
+            
+            # Create system prompt
+            system_prompt = self._create_system_prompt(search_tools)
             
             yield {
                 "type": "thinking",
                 "content": f"Searching {len(search_tools)} tools from {len(self.loaded_sources)} sources..."
             }
             
-            # Setup conversation
-            messages = [SystemMessage(content=system_prompt)]
+            # Setup conversation with context management
+            conversation_history = []
             
             # Add conversation history
             if conversation_id and db_session:
-                history = await self.load_conversation_history(db_session, conversation_id)
-                messages.extend(history)
-            
-            messages.append(HumanMessage(content=message))
+                conversation_history = await self.load_conversation_history(db_session, conversation_id)
             
             # Execute conversation loop
             tools_called = []
+            all_tool_metadata = []  # Collect all metadata across iterations
             iteration = 0
+            tool_results_str = []  # Collect tool results for context management
             
             while iteration < MAX_TOOL_ITERATIONS:
                 iteration += 1
                 
+                # Optimize context before each LLM call (but NOT citation context yet)
+                optimized_history, optimized_tool_results, _ = self.context_manager.optimize_context(
+                    system_prompt=system_prompt,
+                    conversation_history=conversation_history,
+                    current_message=message,
+                    tool_results=tool_results_str,
+                    citation_context=""  # Don't add citation context during tool iterations
+                )
+                
+                # Build messages for this iteration
+                messages = [SystemMessage(content=system_prompt)]
+                messages.extend(optimized_history)
+                messages.append(HumanMessage(content=message))
+                
+                # Add tool results from previous iterations
+                if optimized_tool_results and iteration > 1:
+                    for i, result in enumerate(optimized_tool_results):
+                        messages.append(ToolMessage(content=result, tool_call_id=f"tool_{i}"))
+                
+                # Log context usage
+                estimated_tokens = self.context_manager.estimate_current_context(
+                    system_prompt=system_prompt,
+                    conversation_history=optimized_history,
+                    current_message=message,
+                    tool_results=optimized_tool_results,
+                    citation_context=""
+                )
+                logger.info(f"Context usage: ~{estimated_tokens} tokens (iteration {iteration})")
+                
                 # Get LLM response
                 response = await llm_with_tools.ainvoke(messages)
-                messages.append(response)
                 
                 # Check for tool calls
                 if hasattr(response, 'tool_calls') and response.tool_calls:
@@ -439,10 +471,21 @@ Be intelligent about tool usage - search when information is needed, respond dir
                             "status": "running"
                         }
                     
-                    # Execute tools and get results
-                    tool_results, call_results = await self._execute_tool_calls(
+                    # Execute tools and get results with metadata
+                    tool_results, call_results, tool_metadata = await self._execute_tool_calls(
                         response.tool_calls, message
                     )
+                    
+                    # Store metadata for final citation processing
+                    all_tool_metadata.extend(tool_metadata)
+                    
+                    # Collect tool result strings for context management
+                    for result in call_results:
+                        tool_result_str = result.get("result", "")
+                        if tool_result_str:
+                            # Truncate large tool results immediately
+                            truncated_result = self.context_manager.truncate_tool_result(tool_result_str)
+                            tool_results_str.append(truncated_result)
                     
                     # Stream tool results
                     for result in call_results:
@@ -459,45 +502,65 @@ Be intelligent about tool usage - search when information is needed, respond dir
                         }
                     
                     tools_called.extend(call_results)
-                    messages.extend(tool_results)
                     
-                    # CRITICAL: Add citation context after tools are executed
-                    # This tells the LLM which sources correspond to which citation numbers
-                    citation_context = self.citation_manager.get_citation_context_for_llm()
-                    if citation_context:
-                        citation_message = HumanMessage(content=citation_context)
-                        messages.append(citation_message)
-                        logger.info(f"Added citation context with {len(self.citation_manager.sources)} sources")
+                    # Update conversation history for next iteration
+                    conversation_history.append(AIMessage(content=response.content or ""))
+                    conversation_history.extend(tool_results)
                     
                     continue
                 else:
-                    # Final response
-                    final_content = response.content
+                    # No more tool calls - prepare for final response
                     break
+            
+            # FINAL RESPONSE GENERATION WITH CITATIONS
+            # Now we have all tool results and metadata - generate final response with proper citations
+            
+            # Build citation guidance from collected metadata
+            citation_guidance = self._build_citation_guidance(all_tool_metadata)
+            
+            # Create final prompt with citation guidance
+            final_messages = [SystemMessage(content=system_prompt)]
+            final_messages.extend(optimized_history)
+            final_messages.append(HumanMessage(content=message))
+            
+            # Add all tool results
+            for i, result in enumerate(tool_results_str):
+                final_messages.append(ToolMessage(content=result, tool_call_id=f"tool_{i}"))
+            
+            # Add citation guidance as a system message
+            if citation_guidance:
+                citation_prompt = f"""Based on the tool results above, here is information you can cite:
+
+{citation_guidance}
+
+IMPORTANT CITATION INSTRUCTIONS:
+1. Use [1], [2], [3] format when citing specific information from sources
+2. Only cite when directly referencing information from a source
+3. Match citation numbers to the source list above
+4. Make any ticket IDs, PR numbers, or document names clickable using markdown: [TICKET-123](url)
+5. Be specific about which source information comes from"""
+                
+                final_messages.append(SystemMessage(content=citation_prompt))
+            
+            # Get final response with proper citations
+            final_response = await llm.ainvoke(final_messages)
+            final_content = final_response.content
             
             # Process final response with citations
             if iteration >= MAX_TOOL_ITERATIONS:
-                final_content = getattr(response, 'content', "Maximum iterations reached")
+                final_content = "I've reached the maximum number of tool iterations. Here's what I found:\n\n" + final_content
             
-            # Remove LLM's basic <SOURCES> section and add our comprehensive one
+            # Remove any <SOURCES> sections the LLM might have added
             import re
             final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
             
-            # Post-process with LLM to create clickable links and polish citations
-            final_content = await self._post_process_response_with_llm(llm, final_content)
+            # Post-process to create clickable links
+            final_content = self._create_clickable_links(final_content, all_tool_metadata)
             
-            # Don't add reference list to text - will show in Sources section instead
-            # reference_list = self.citation_manager.generate_reference_list()
-            # if reference_list:
-            #     final_content += f"\n\n{reference_list}"
+            # Build sources list from metadata
+            sources = self._build_sources_from_metadata(all_tool_metadata, final_content)
             
-            # Generate enhanced sources for the Sources section (user loves this!)
-            enhanced_sources = self._enhance_sources_with_urls(
-                final_content, 
-                self.citation_manager.get_sources_metadata()
-            )
-            
-            # Generate processing stats
+            # Generate processing stats including context management info
             total_tools_called = len(tools_called)
             
             yield {
@@ -506,190 +569,156 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 "tool_calls": tools_called,
                 "tools_available": len(search_tools),
                 "servers_connected": len(self.loaded_sources),
-                "sources": enhanced_sources,
+                "sources": sources,
                 "processing_stats": {
                     "total_tools_called": total_tools_called,
-                    "sources_found": len(self.citation_manager.sources),
+                    "sources_found": len(sources),
                     "query_type": "fast_mcp_agent",
-                    "response_time_ms": int((time.time() - query_start) * 1000)
+                    "response_time_ms": int((time.time() - query_start) * 1000),
+                    "context_tokens_used": estimated_tokens,
+                    "context_optimized": len(conversation_history) != len(optimized_history),
+                    "conversation_messages_kept": len(optimized_history) if optimized_history else 0,
+                    "conversation_messages_total": len(conversation_history) if conversation_history else 0
                 }
             }
             
-            logger.info("FastMCPAgent query completed successfully")
+            logger.info("FastMCPAgent query completed successfully with flexible citation system")
             
         except Exception as e:
-            logger.error("Query execution failed", error=str(e))
-            yield {"type": "error", "error": f"Query failed: {str(e)}"}
-
-    def _filter_unused_citations(self, content: str) -> None:
-        """Filter citation manager to only keep sources actually referenced in content"""
+            logger.exception("Query execution failed")
+            yield {
+                "type": "error", 
+                "error": f"Query failed: {str(e)}",
+                "details": str(e)
+            }
+    
+    def _build_citation_guidance(self, tool_metadata: List[Dict]) -> str:
+        """Build citation guidance from tool metadata for the final LLM call"""
+        if not tool_metadata:
+            return ""
+        
+        citation_lines = []
+        source_num = 1
+        
+        for meta in tool_metadata:
+            tool_name = meta['tool_name']
+            metadata = meta['metadata']
+            
+            # Skip if no useful information
+            if not any([metadata.get('urls'), metadata.get('titles'), metadata.get('identifiers')]):
+                continue
+            
+            # Build citation entry
+            citation_parts = []
+            
+            # Use first title if available
+            if metadata.get('titles'):
+                citation_parts.append(f"[{source_num}] {metadata['titles'][0]}")
+            else:
+                citation_parts.append(f"[{source_num}] {tool_name} results")
+            
+            # Add primary URL if available
+            if metadata.get('urls'):
+                citation_parts.append(f"   URL: {metadata['urls'][0]}")
+            
+            # Add identifiers
+            if metadata.get('identifiers'):
+                ids = metadata['identifiers']
+                if ids.get('primary_ticket'):
+                    citation_parts.append(f"   Ticket: {ids['primary_ticket']}")
+                if ids.get('pr_number'):
+                    citation_parts.append(f"   PR: #{ids['pr_number']}")
+                if ids.get('issue_number'):
+                    citation_parts.append(f"   Issue: #{ids['issue_number']}")
+            
+            # Add source type
+            if metadata.get('source_type'):
+                citation_parts.append(f"   Type: {metadata['source_type']}")
+            
+            citation_lines.extend(citation_parts)
+            citation_lines.append("")  # Empty line between sources
+            source_num += 1
+        
+        return "\n".join(citation_lines)
+    
+    def _create_clickable_links(self, content: str, tool_metadata: List[Dict]) -> str:
+        """Create clickable links for identifiers found in content"""
         import re
         
-        # Find all citation references in the content [1], [2], [3], etc.
+        # Build mapping of identifiers to URLs
+        id_to_url = {}
+        
+        for meta in tool_metadata:
+            metadata = meta['metadata']
+            urls = metadata.get('urls', [])
+            identifiers = metadata.get('identifiers', {})
+            
+            if not urls:
+                continue
+            
+            primary_url = urls[0]
+            
+            # Map ticket IDs
+            if identifiers.get('primary_ticket'):
+                id_to_url[identifiers['primary_ticket']] = primary_url
+            
+            # Map all tickets if available
+            if identifiers.get('tickets'):
+                for ticket in identifiers['tickets'].split(','):
+                    if ticket and ticket not in id_to_url:
+                        # Try to construct URL for this ticket
+                        if 'jira' in metadata.get('source_type', ''):
+                            base_url = primary_url.rsplit('/browse/', 1)[0]
+                            id_to_url[ticket] = f"{base_url}/browse/{ticket}"
+        
+        # Replace identifiers with clickable links
+        def replace_identifier(match):
+            identifier = match.group(1)
+            if identifier in id_to_url:
+                url = id_to_url[identifier]
+                return f'[{identifier}]({url})'
+            return identifier
+        
+        # Pattern for ticket IDs
+        ticket_pattern = r'\b([A-Z][A-Z0-9]*-\d+)\b'
+        content = re.sub(ticket_pattern, replace_identifier, content)
+        
+        return content
+    
+    def _build_sources_from_metadata(self, tool_metadata: List[Dict], final_content: str) -> List[Dict]:
+        """Build sources list from tool metadata, filtered by what's actually cited"""
+        import re
+        
+        # Find all citation references in the final content
         citation_pattern = r'\[(\d+)\]'
         referenced_citations = set()
+        for match in re.finditer(citation_pattern, final_content):
+            referenced_citations.add(int(match.group(1)))
         
-        for match in re.finditer(citation_pattern, content):
-            citation_num = int(match.group(1))
-            referenced_citations.add(citation_num)
+        sources = []
+        source_num = 1
         
-        if not referenced_citations:
-            # No citations found, clear all sources
-            self.citation_manager.clear()
-            logger.info("No citation references found, cleared all sources")
-            return
-        
-        # Keep only sources that are actually referenced
-        original_count = len(self.citation_manager.sources)
-        filtered_sources = []
-        
-        # Special handling for Jira: if we have multiple Jira ticket sources and [1] is referenced,
-        # keep all Jira sources from the same tool call (they're individual tickets from one search)
-        jira_sources = [s for s in self.citation_manager.sources if s.source_type == "jira" and s.metadata.get("tool") in ["jira_search", "search"]]
-        has_jira_citation = any(i + 1 in referenced_citations for i in range(len(self.citation_manager.sources)) 
-                               if self.citation_manager.sources[i].source_type == "jira")
-        
-        for i, source in enumerate(self.citation_manager.sources):
-            citation_index = i + 1  # Citations are 1-indexed
+        for meta in tool_metadata:
+            metadata = meta['metadata']
             
-            # Keep if directly referenced
-            if citation_index in referenced_citations:
-                filtered_sources.append(source)
-            # Special case: Keep all Jira ticket sources if any Jira source is referenced
-            elif (source.source_type == "jira" and 
-                  source.metadata.get("tool") in ["jira_search", "search"] and 
-                  has_jira_citation and
-                  len(jira_sources) > 1):
-                filtered_sources.append(source)
-                logger.info(f"🎫 KEEPING JIRA TICKET: {source.title} (part of multi-ticket result)")
-        
-        # Update citation manager with filtered sources
-        self.citation_manager.sources = filtered_sources
-        
-        filtered_count = len(filtered_sources)
-        removed_count = original_count - filtered_count
-        
-        logger.info(
-            "Filtered unused citations",
-            original_count=original_count,
-            filtered_count=filtered_count,
-            removed_count=removed_count,
-            referenced_citations=sorted(referenced_citations),
-            jira_sources_kept=len([s for s in filtered_sources if s.source_type == "jira"])
-        )
-
-    async def _post_process_response_with_llm(self, llm, content: str) -> str:
-        """Use LLM to post-process response: create clickable links, polish citations"""
-        if not self.citation_manager.sources:
-            return content
-        
-        # Create ticket ID to URL mapping for LLM
-        ticket_urls = {}
-        for source in self.citation_manager.sources:
-            if source.url:
-                # Extract ticket ID from title (like "MKT-1183: ...")
-                import re
-                title_match = re.match(r'^([A-Z]+-\d+):', source.title)
-                if title_match:
-                    ticket_id = title_match.group(1)
-                    ticket_urls[ticket_id] = source.url
-        
-        # Create mapping text for LLM
-        ticket_mapping = []
-        for ticket_id, url in ticket_urls.items():
-            ticket_mapping.append(f"{ticket_id} → {url}")
-        mapping_text = "\n".join(ticket_mapping)
-        
-        logger.info(f"Post-processing with {len(ticket_urls)} ticket URLs: {list(ticket_urls.keys())}")
-        
-        post_process_prompt = f"""TASK: Convert ALL ticket IDs to clickable markdown links in this response.
-
-RESPONSE TO PROCESS:
-{content}
-
-TICKET ID → URL MAPPING:
-{mapping_text}
-
-INSTRUCTIONS:
-1. Find EVERY ticket ID in the response (pattern: LETTERS-NUMBERS like MYP-330, GFIRADAR-19, etc.)
-2. Convert to markdown link: MYP-330 becomes [MYP-330](url)
-3. Keep everything else EXACTLY the same (including citations [1], [2], etc.)
-4. Be thorough - don't miss any ticket IDs
-
-EXAMPLES:
-- "MYP-330: Configuration" → "[MYP-330](url): Configuration"  
-- "GFIRADAR-19: RADAR charts" → "[GFIRADAR-19](url): RADAR charts"
-
-CRITICAL: Find and convert ALL ticket IDs mentioned in the text. Use the exact URLs from the mapping above.
-
-OUTPUT: Return the response with ALL ticket IDs converted to clickable markdown links."""
-
-        try:
-            post_process_message = HumanMessage(content=post_process_prompt)
-            processed_response = await llm.ainvoke([post_process_message])
-            processed_content = processed_response.content.strip()
+            # Skip if no useful information
+            if not any([metadata.get('urls'), metadata.get('titles'), metadata.get('identifiers')]):
+                continue
             
-            # Filter citations based on what's actually used in processed response
-            self._filter_unused_citations(processed_content)
+            # Only include if this source number is referenced
+            if source_num in referenced_citations:
+                source = {
+                    "title": metadata['titles'][0] if metadata.get('titles') else f"{meta['tool_name']} results",
+                    "url": metadata['urls'][0] if metadata.get('urls') else None,
+                    "source_type": metadata.get('source_type', 'tool_result'),
+                    "snippet": metadata.get('snippet', '')[:300],
+                    "metadata": {
+                        "tool": meta['tool_name'],
+                        "identifiers": metadata.get('identifiers', {})
+                    }
+                }
+                sources.append(source)
             
-            logger.info("LLM post-processing completed")
-            return processed_content
-            
-        except Exception as e:
-            logger.warning("LLM post-processing failed, using regex fallback", error=str(e))
-            # Fallback: Use regex to create clickable links
-            processed_content = self._create_clickable_links_regex(content)
-            self._filter_unused_citations(processed_content)
-            return processed_content
-
-    def _create_clickable_links_regex(self, content: str) -> str:
-        """Fallback: Use regex to convert ticket IDs to clickable links"""
-        import re
+            source_num += 1
         
-        # Create URL mapping from sources
-        ticket_to_url = {}
-        for source in self.citation_manager.sources:
-            if source.url:
-                # Extract ticket ID from title (like "MKT-1183: ...")
-                title_match = re.match(r'^([A-Z]+-\d+):', source.title)
-                if title_match:
-                    ticket_id = title_match.group(1)
-                    ticket_to_url[ticket_id] = source.url
-        
-        logger.info(f"Regex fallback: Found {len(ticket_to_url)} ticket URLs: {list(ticket_to_url.keys())}")
-        
-        # Replace ticket IDs with clickable links
-        def replace_ticket(match):
-            ticket_id = match.group(1)
-            if ticket_id in ticket_to_url:
-                url = ticket_to_url[ticket_id]
-                logger.info(f"Converting {ticket_id} to clickable link: {url}")
-                return f'[{ticket_id}]({url})'
-            else:
-                logger.warning(f"No URL found for ticket {ticket_id}")
-                return ticket_id  # Keep original if no URL found
-        
-        # Find ticket patterns like ABC-123, PROJECT-456, etc.
-        # More comprehensive pattern to catch various formats
-        ticket_pattern = r'\b([A-Z]+[A-Z0-9]*-\d+)\b'
-        processed_content = re.sub(ticket_pattern, replace_ticket, content)
-        
-        logger.info("Applied regex fallback for clickable links")
-        return processed_content
-
-    def _enhance_sources_with_urls(self, content: str, sources_metadata: List[Dict]) -> List[Dict]:
-        """Convert citation manager sources to frontend-compatible format"""
-        enhanced_sources = []
-        
-        # Get sources directly from citation manager
-        for source in self.citation_manager.sources:
-            enhanced_source = {
-                "title": source.title,
-                "source_type": source.source_type,
-                "url": source.url if source.url else None,
-                "snippet": source.snippet,
-                "metadata": source.metadata
-            }
-            enhanced_sources.append(enhanced_source)
-        
-        return enhanced_sources
+        return sources

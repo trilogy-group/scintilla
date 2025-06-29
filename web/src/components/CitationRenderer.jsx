@@ -6,13 +6,15 @@ import { ExternalLink } from 'lucide-react'
 /**
  * Component for rendering citation numbers [1], [2], etc.
  */
-export const CitationLink = ({ number, className = "" }) => {
+export const CitationLink = ({ number, onClick, className = "" }) => {
   return (
-    <span
-      className={`citation-link inline-flex items-center text-xs bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 px-1 py-0.5 rounded ${className}`}
+    <button
+      onClick={() => onClick?.(number)}
+      className={`citation-link inline-flex items-center text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 py-0.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors cursor-pointer ${className}`}
+      title={`Go to source ${number}`}
     >
       [{number}]
-    </span>
+    </button>
   )
 }
 
@@ -194,6 +196,7 @@ const processCitations = (content, sources, onCitationClick) => {
       <CitationLink
         key={`citation-${citationNumber}-${match.index}-${Math.random()}`}
         number={citationNumber}
+        onClick={onCitationClick}
         className="mx-0.5"
       />
     )
