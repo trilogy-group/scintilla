@@ -143,14 +143,10 @@ class ToolResultProcessor:
                     continue
                 
                 # Convert Jira API URLs to browse URLs
-                if '/rest/api/' in url and '/issue/' in url:
-                    # Extract issue ID and convert to browse URL
-                    issue_id_match = re.search(r'/rest/api/\d+/issue/(\d+)', url)
-                    if issue_id_match:
-                        base_url = url.split('/rest/api/')[0]
-                        # We need the issue key, not just ID - will be handled in Jira-specific processing
-                        # For now, skip API URLs and let Jira processing handle browse URL construction
-                        continue
+                if '/rest/api/' in url and ('/issue/' in url or '/project/' in url):
+                    # Skip all Jira API URLs - we'll construct browse URLs separately
+                    # This includes both issue and project API URLs
+                    continue
                 
                 seen_urls.add(url)
                 urls.append(url)

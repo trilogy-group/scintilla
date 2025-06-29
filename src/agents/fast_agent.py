@@ -266,7 +266,7 @@ CITATION REQUIREMENTS (only when using tools):
 - Don't add citations to general introductory sentences or summaries
 - Only cite when the information comes directly from a specific tool result
 - For example: "The ticket PDR-148554 has status 'Requested' [1]" NOT "Here are the tickets [1]:"
-- Don't worry about making links clickable - I'll handle that in post-processing
+- Focus on citation accuracy - URL formatting and link validation will be handled automatically
 - I will provide a comprehensive Sources section automatically - do NOT add your own <SOURCES> section
 
 CAPABILITY RESPONSE (when asked what you can do):
@@ -540,8 +540,9 @@ IMPORTANT CITATION INSTRUCTIONS:
 1. Use [1], [2], [3] format when citing specific information from sources
 2. Only cite when directly referencing information from a source
 3. Match citation numbers to the source list above
-4. Make any ticket IDs, PR numbers, or document names clickable using markdown: [TICKET-123](url)
+4. Mention ticket IDs, PR numbers, or document names as plain text
 5. Be specific about which source information comes from
+6. Focus on accuracy - formatting will be validated and fixed automatically
 
 Please provide your response with proper citations based on the tool results."""
                 
@@ -559,7 +560,13 @@ Please provide your response with proper citations based on the tool results."""
             import re
             final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
             
-            # Post-process to create clickable links
+            # LLM-BASED VALIDATION STEP - Use LLM intelligence to validate and fix issues
+            if citation_guidance and all_tool_metadata:
+                final_content = await self._validate_and_fix_response(
+                    llm, final_content, citation_guidance, all_tool_metadata
+                )
+            
+            # Minimal post-processing for clickable links (LLM should handle most of this now)
             final_content = self._create_clickable_links(final_content, all_tool_metadata)
             
             # Build sources list from metadata
@@ -676,13 +683,30 @@ Please provide your response with proper citations based on the tool results."""
                             base_url = primary_url.rsplit('/browse/', 1)[0]
                             id_to_url[ticket] = f"{base_url}/browse/{ticket}"
         
-        # Replace identifiers with clickable links
+        # Replace identifiers with clickable links, but avoid ones already in markdown links
         def replace_identifier(match):
+            full_match = match.group(0)
             identifier = match.group(1)
+            start_pos = match.start()
+            
+            # Check if this identifier is already inside a markdown link
+            # Look for preceding '[' and check if there's a corresponding '](' pattern
+            preceding_text = content[:start_pos]
+            if '[' in preceding_text:
+                # Find the last '[' before this position
+                last_bracket = preceding_text.rfind('[')
+                if last_bracket != -1:
+                    # Check if there's a '](' pattern after our identifier
+                    following_text = content[match.end():]
+                    if following_text.startswith(']('):
+                        # This identifier is already part of a markdown link, don't replace
+                        return full_match
+            
+            # Safe to replace
             if identifier in id_to_url:
                 url = id_to_url[identifier]
                 return f'[{identifier}]({url})'
-            return identifier
+            return full_match
         
         # Pattern for ticket IDs
         ticket_pattern = r'\b([A-Z][A-Z0-9]*-\d+)\b'
@@ -727,3 +751,68 @@ Please provide your response with proper citations based on the tool results."""
             source_num += 1
         
         return sources
+
+    async def _validate_and_fix_response(self, llm, final_content, citation_guidance, all_tool_metadata):
+        """Use LLM intelligence to validate and fix citations, URLs, and formatting"""
+        
+        # Build URL mapping for validation
+        url_mapping = {}
+        ticket_mapping = {}
+        
+        for meta in all_tool_metadata:
+            metadata = meta['metadata']
+            urls = metadata.get('urls', [])
+            identifiers = metadata.get('identifiers', {})
+            
+            if urls and identifiers.get('primary_ticket'):
+                primary_url = urls[0]
+                primary_ticket = identifiers['primary_ticket']
+                ticket_mapping[primary_ticket] = primary_url
+                url_mapping[primary_ticket] = primary_url
+                
+                # Add all tickets if available
+                if identifiers.get('tickets'):
+                    for ticket in identifiers['tickets'].split(','):
+                        if ticket and ticket not in ticket_mapping:
+                            if 'jira' in metadata.get('source_type', ''):
+                                base_url = primary_url.rsplit('/browse/', 1)[0]
+                                ticket_mapping[ticket] = f"{base_url}/browse/{ticket}"
+        
+        # Create validation prompt
+        validation_prompt = f"""You are a citation and formatting validator. Please review and fix the following response to ensure:
+
+1. **Citation Accuracy**: All [1], [2], [3] references correspond to the provided sources
+2. **URL Formatting**: All URLs and markdown links are properly formatted
+3. **Ticket Links**: All ticket IDs (like TST-28, LIA-32018) should be clickable markdown links
+4. **No Nested Links**: Ensure no nested or malformed markdown like [[text](url)](url)
+5. **Consistency**: Information matches the cited sources
+
+AVAILABLE SOURCES:
+{citation_guidance}
+
+TICKET TO URL MAPPING:
+{chr(10).join([f"{ticket} -> {url}" for ticket, url in ticket_mapping.items()])}
+
+RESPONSE TO VALIDATE:
+{final_content}
+
+VALIDATION RULES:
+- Fix any malformed markdown links
+- Ensure ticket IDs become clickable: TST-28 -> [TST-28](https://jira.dev.lithium.com/browse/TST-28)
+- Verify citations [1], [2] match the source list
+- Remove or fix any nested links like [[text](url)](url)
+- Keep the same information, just fix formatting and links
+- Do not add your own sources section
+
+Please provide the corrected response:"""
+
+        try:
+            validation_response = await llm.ainvoke([HumanMessage(content=validation_prompt)])
+            validated_content = validation_response.content.strip()
+            
+            logger.info("✅ LLM validation completed successfully")
+            return validated_content
+            
+        except Exception as e:
+            logger.warning(f"⚠️  LLM validation failed: {e}, using original content")
+            return final_content
