@@ -83,11 +83,11 @@ class FastMCPService:
         if "Authorization" in auth_headers:
             auth_value = auth_headers["Authorization"]
             if auth_value.startswith("Bearer "):
-                # Extract just the token for FastMCP auth parameter
-                token = auth_value[7:]  # Remove "Bearer " prefix
-                fastmcp_config["auth"] = token
+                # For Bearer tokens, pass the full Authorization header value
+                # Some servers (like MCP Atlassian) expect the full "Bearer <token>" format
+                fastmcp_config["headers"] = {"Authorization": auth_value}
             else:
-                # Use the full authorization value
+                # For other auth types, try passing as auth parameter
                 fastmcp_config["auth"] = auth_value
         elif "x-api-key" in auth_headers:
             # For x-api-key, try embedding in URL as FastMCP might expect it there
@@ -97,6 +97,9 @@ class FastMCPService:
             query_params["x-api-key"] = [auth_headers["x-api-key"]]
             new_query = urlencode(query_params, doseq=True)
             server_url = urlunparse(parsed._replace(query=new_query))
+        else:
+            # For any other headers, pass them directly
+            fastmcp_config["headers"] = auth_headers
         
         return server_url, fastmcp_config
     
@@ -106,7 +109,7 @@ class FastMCPService:
         auth_headers: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
-        Test connection to MCP server using FastMCP
+        Test connection to MCP server using official MCP client (consistent with tool calls)
         
         Args:
             server_url: MCP server URL 
@@ -118,25 +121,47 @@ class FastMCPService:
         start_time = time.time()
         
         try:
-            # Prepare URL and auth
-            final_server_url, fastmcp_config = FastMCPService._prepare_auth_for_fastmcp(
-                server_url, auth_headers
-            )
+            # Use the same authentication method as tool calls and discovery
+            headers = {}
+            sse_url = server_url
             
-            # Test connection with timeout
-            async with FastMCPClient(final_server_url, **fastmcp_config) as client:
-                tools = await asyncio.wait_for(client.list_tools(), timeout=15.0)
-                
-                end_time = time.time()
-                response_time = int((end_time - start_time) * 1000)
-                
-                return {
-                    "success": True,
-                    "message": "Connection successful",
-                    "tool_count": len(tools),
-                    "response_time_ms": response_time,
-                    "tools": [tool.name for tool in tools[:10]]  # First 10 tools
-                }
+            # Handle URL-embedded authentication (Hive style)
+            if "x-api-key=" in server_url:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(server_url)
+                query_params = parse_qs(parsed.query)
+                if "x-api-key" in query_params:
+                    api_key = query_params["x-api-key"][0]
+                    headers["x-api-key"] = api_key
+                    # Remove auth from URL for clean SSE connection
+                    sse_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                    if not sse_url.endswith('/sse'):
+                        sse_url += '/sse'
+            else:
+                # Handle header-based authentication (Atlassian style)
+                if auth_headers and len(auth_headers) > 0:
+                    headers.update(auth_headers)
+                # Ensure URL ends with /sse
+                if not sse_url.endswith('/sse'):
+                    sse_url += '/sse'
+            
+            # Test connection using official MCP client
+            async with sse_client(sse_url, headers=headers) as (transport_read, transport_write):
+                async with ClientSession(transport_read, transport_write) as session:
+                    await session.initialize()
+                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
+                    tools = tools_response.tools
+                    
+                    end_time = time.time()
+                    response_time = int((end_time - start_time) * 1000)
+                    
+                    return {
+                        "success": True,
+                        "message": "Connection successful",
+                        "tool_count": len(tools),
+                        "response_time_ms": response_time,
+                        "tools": [tool.name for tool in tools[:10]]  # First 10 tools
+                    }
                 
         except asyncio.TimeoutError:
             return {
@@ -197,14 +222,37 @@ class FastMCPService:
                     db, source_id, server_url
                 )
             
-            # Prepare URL and auth for remote MCP servers
-            final_server_url, fastmcp_config = FastMCPService._prepare_auth_for_fastmcp(
-                server_url, auth_headers
-            )
+            # Use the same authentication method as tool calls (official MCP client)
+            # This ensures consistency and works with servers that need specific header formats
+            headers = {}
+            sse_url = server_url
             
-            # Discover tools
-            async with FastMCPClient(final_server_url, **fastmcp_config) as client:
-                tools = await asyncio.wait_for(client.list_tools(), timeout=30.0)
+            # Handle URL-embedded authentication (Hive style)
+            if "x-api-key=" in server_url:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(server_url)
+                query_params = parse_qs(parsed.query)
+                if "x-api-key" in query_params:
+                    api_key = query_params["x-api-key"][0]
+                    headers["x-api-key"] = api_key
+                    # Remove auth from URL for clean SSE connection
+                    sse_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                    if not sse_url.endswith('/sse'):
+                        sse_url += '/sse'
+            else:
+                # Handle header-based authentication (Atlassian style)
+                if auth_headers and len(auth_headers) > 0:
+                    headers.update(auth_headers)
+                # Ensure URL ends with /sse
+                if not sse_url.endswith('/sse'):
+                    sse_url += '/sse'
+            
+            # Discover tools using official MCP client (same as tool calls)
+            async with sse_client(sse_url, headers=headers) as (transport_read, transport_write):
+                async with ClientSession(transport_read, transport_write) as session:
+                    await session.initialize()
+                    tools_response = await asyncio.wait_for(session.list_tools(), timeout=30.0)
+                    tools = tools_response.tools
             
             # Clear existing cached tools for this source
             await db.execute(

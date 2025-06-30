@@ -6,10 +6,11 @@
 
 - **🔍 Federated Search**: Query across multiple MCP sources simultaneously
 - **🤖 AI-Powered Chat**: LangChain agents with Anthropic Claude and OpenAI GPT
-- **📊 Source Management**: Add, configure, and manage MCP tool sources
-- **🎯 Bot Configuration**: Create specialized bots with custom instructions and source access
-- **📝 Citation Tracking**: Every answer includes proper source citations
-- **⚡ High Performance**: Tool caching for faster responses
+- **📊 Advanced Source Management**: Public/private sources with granular sharing controls
+- **🎯 Smart Bot Configuration**: Create specialized bots with custom instructions and source access
+- **🎖️ Enhanced Citation System**: Reliable multi-source citations with intelligent validation
+- **📝 Intelligent Source Selection**: Persistent UI controls for query-specific source filtering
+- **⚡ High Performance**: Tool caching and context management for faster responses
 - **🔐 Enterprise Security**: Google OAuth with domain restrictions and KMS encryption
 - **📱 Modern UI**: React-based interface with real-time streaming responses
 
@@ -25,6 +26,31 @@
 | **Authentication** | Google OAuth 2.0 | Secure user authentication |
 | **Encryption** | AWS KMS + AES | Credential protection |
 | **Deployment** | AWS (EC2, RDS, ALB) | Scalable cloud infrastructure |
+
+## 🔬 Advanced Features
+
+### Enhanced Citation System
+- **Flexible Metadata Extraction**: `ToolResultProcessor` extracts URLs, titles, and identifiers from any tool
+- **Multi-Source Citations**: Automatic `[1], [2], [3]` numbering for multiple tickets/issues in single results
+- **LLM-Based Validation**: Intelligent citation validation and malformed link fixing
+- **Smart URL Filtering**: Filters out avatar URLs, API endpoints, and non-content links
+- **Clickable Citations**: Citation numbers link directly to source URLs
+
+### Source Selection System
+- **Public Sources**: Available to all users with `is_public` flag
+- **Personal Sources**: Private by default with optional sharing
+- **Granular Sharing**: Share sources with specific users via `SourceShare` table
+- **Bot-Owned Sources**: Sources created and managed by bots
+- **Query-Time Selection**: UI controls for selecting sources per query
+- **Persistent State**: Source selections saved in localStorage
+
+### Access Control Matrix
+| Source Type | Owner | Access | Sharing |
+|-------------|-------|--------|---------|
+| **Personal** | User | Private by default | Can share with specific users |
+| **Public** | User | Available to all | Public access |
+| **Shared** | Other User | Granted access | Via SourceShare table |
+| **Bot-Owned** | Bot | Bot + accessible users | Follows bot access rules |
 
 ## 🚀 Quick Start
 
@@ -114,11 +140,16 @@ TEST_MODE=false  # Set to true for development without MCP
 - `GET /api/conversations` - Conversation history
 - `POST /api/conversations` - Create new conversation
 
-### Management Endpoints
-- `GET /api/sources` - List MCP sources
+### Source Management
+- `GET /api/sources` - List user's sources
 - `POST /api/sources` - Create new source
+- `GET /api/sources/available-for-query` - Sources available for query selection
+- `POST /api/sources/{source_id}/share` - Share source with users
+
+### Bot Management
 - `GET /api/bots` - List available bots
 - `POST /api/bots` - Create new bot
+- `PUT /api/bots/{bot_id}` - Update bot configuration
 
 ### Query API Example
 ```bash
@@ -128,6 +159,7 @@ curl -X POST http://localhost:8000/api/query \
   -d '{
     "message": "How does authentication work in our React applications?",
     "bot_ids": ["bot-uuid-here"],
+    "selected_sources": ["source-uuid-1", "source-uuid-2"],
     "mode": "conversational",
     "stream": true,
     "llm_provider": "anthropic"
@@ -139,6 +171,12 @@ curl -X POST http://localhost:8000/api/query \
 ### Run Full Test Suite
 ```bash
 python tests/run_tests.py
+```
+
+### Citation System Testing
+```bash
+python scripts/test_citation_system.py      # Test flexible citation extraction
+python scripts/test_context_management.py   # Test context optimization
 ```
 
 ### Individual Test Categories
@@ -167,14 +205,16 @@ scintilla/
 │   │   ├── query_handlers.py   # Query processing logic
 │   │   ├── conversation_manager.py # Chat history management
 │   │   ├── bots.py             # Bot management
-│   │   ├── sources.py          # Source management
+│   │   ├── sources.py          # Source management with sharing
 │   │   └── models.py           # Pydantic request/response models
 │   ├── agents/                 # AI agent implementations
 │   │   ├── fast_agent.py       # High-performance LangChain agent
 │   │   ├── fast_mcp.py         # FastMCP tool management with caching
-│   │   └── citations.py        # Source citation extraction
+│   │   ├── tool_result_processor.py # Flexible metadata extraction
+│   │   ├── context_manager.py  # Context optimization
+│   │   └── citations.py        # Citation management utilities
 │   ├── db/                     # Database layer
-│   │   ├── models.py           # SQLAlchemy models
+│   │   ├── models.py           # SQLAlchemy models with sharing
 │   │   ├── tool_cache.py       # Tool caching service
 │   │   ├── mcp_credentials.py  # Credential management
 │   │   └── encryption.py       # Encryption utilities
@@ -186,12 +226,13 @@ scintilla/
 │   │   ├── components/         # React components
 │   │   │   ├── LandingPage.jsx # Landing page with search
 │   │   │   ├── BotsManager.jsx # Bot management interface
-│   │   │   ├── SourcesManager.jsx # Source management
-│   │   │   ├── CitationRenderer.jsx # Citation display
+│   │   │   ├── SourcesManager.jsx # Source management with sharing
+│   │   │   ├── CitationRenderer.jsx # Enhanced citation display
 │   │   │   └── GoogleAuth.jsx  # Authentication component
 │   │   ├── hooks/              # React hooks
 │   │   │   ├── useScintilla.js # Main application hook
-│   │   │   └── useBotAutoComplete.jsx # Bot suggestions
+│   │   │   ├── useBotAutoComplete.jsx # Bot suggestions
+│   │   │   └── useSourceSelector.jsx # Source selection controls
 │   │   └── services/
 │   │       └── api.js          # API client
 │   └── package.json            # Frontend dependencies
@@ -199,6 +240,8 @@ scintilla/
 ├── scripts/                    # Utility scripts
 │   ├── init_db.py              # Database initialization
 │   ├── performance_test.py     # Performance benchmarking
+│   ├── test_citation_system.py # Citation system testing
+│   ├── test_context_management.py # Context optimization testing
 │   ├── simple_test.py          # Basic functionality tests
 │   ├── diagnose_tools.py       # Tool debugging utilities
 │   ├── recache_tools.py        # Tool cache management
@@ -316,6 +359,7 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 - **Connection security** with HTTPS-only MCP connections
 - **Input validation** with Pydantic models
 - **SQL injection protection** with SQLAlchemy ORM
+- **Granular access control** for sources and bots
 
 ## 📊 Monitoring & Observability
 
@@ -323,11 +367,33 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 - **Health check endpoints** with detailed MCP status
 - **Performance metrics** tracking in logs
 - **Error tracking** with detailed stack traces
+- **Citation system validation** with success/failure tracking
+
+## 🎯 Recent Improvements
+
+### Citation System Redesign
+- **Flexible Metadata Extraction**: New `ToolResultProcessor` handles any tool type
+- **Multi-Source Support**: Automatic [1], [2], [3] for multiple tickets in Jira results
+- **LLM Validation**: Intelligent fixing of malformed citations and nested links
+- **Better URL Filtering**: Filters avatar URLs and API endpoints
+
+### Source Selection System
+- **Public/Private Sources**: `is_public` field for organization-wide access
+- **Persistent UI Controls**: Source selection saved in localStorage
+- **Query-Time Filtering**: Select specific sources for each query
+- **Access Control Matrix**: Comprehensive sharing and ownership system
+
+### Performance Optimizations
+- **Context Management**: Intelligent conversation history optimization
+- **Tool Result Truncation**: Large responses truncated to prevent context overflow
+- **Async Database Operations**: Greenlet-safe SQLAlchemy patterns
+- **Tool Caching**: Faster subsequent queries with cached tool metadata
 
 ## 📚 Additional Documentation
 
 - [`AWS_DEPLOYMENT.md`](AWS_DEPLOYMENT.md) - **Complete AWS deployment guide** with step-by-step instructions and troubleshooting
 - [`DEPLOYMENT_CHECKLIST.md`](DEPLOYMENT_CHECKLIST.md) - **Production deployment checklist** with verification steps
+- [`CITATION_SYSTEM_REDESIGN.md`](CITATION_SYSTEM_REDESIGN.md) - **Citation system architecture** and design decisions
 - [`PERFORMANCE_IMPROVEMENTS.md`](PERFORMANCE_IMPROVEMENTS.md) - Detailed performance optimization documentation
 - [`BEST_PRACTICES.md`](BEST_PRACTICES.md) - Development and deployment best practices
 - [`CLEANUP_LOG.md`](CLEANUP_LOG.md) - Record of codebase cleanup activities
@@ -340,6 +406,7 @@ cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 2. Run the full test suite before submitting changes
 3. Update documentation for new features
 4. Use structured logging for observability
+5. Test citation system with `scripts/test_citation_system.py`
 
 ## 📄 License
 
