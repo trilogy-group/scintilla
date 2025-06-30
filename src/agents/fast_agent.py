@@ -100,6 +100,39 @@ class FastMCPAgent:
                    remote_tools=len(self.remote_tools))
         return tool_count
     
+    async def load_tools_for_specific_sources(
+        self, 
+        db: AsyncSession, 
+        user_id: uuid.UUID,
+        source_ids: List[uuid.UUID]
+    ) -> int:
+        """Load tools from database cache for specific source IDs only"""
+        logger.info("Loading FastMCP tools for specific sources", user_id=user_id, source_ids=source_ids)
+        
+        # Load tools via centralized tool manager
+        tool_count = await self.tool_manager.load_tools_for_specific_sources(
+            db=db,
+            user_id=user_id,
+            source_ids=source_ids
+        )
+        
+        # Store references for compatibility
+        self.tools = self.tool_manager.get_tools()
+        self.loaded_sources = self.tool_manager.get_server_names()
+        
+        # Get source instructions from the tool manager
+        self.source_instructions = await self.tool_manager.get_source_instructions(db)
+        
+        # Classify tools for routing
+        self._classify_tools()
+        
+        logger.info("FastMCP tools loaded and classified for specific sources", 
+                   tool_count=tool_count, 
+                   sources=len(self.loaded_sources),
+                   local_tools=len(self.local_tools),
+                   remote_tools=len(self.remote_tools))
+        return tool_count
+    
     def filter_search_tools(self) -> List[BaseTool]:
         """Filter to search/read-only tools"""
         return self.tool_manager.filter_search_tools()

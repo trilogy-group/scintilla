@@ -226,17 +226,46 @@ class ProductionModeHandler:
             result = await self.db.execute(bot_sources_query)
             bot_source_ids = [row[0] for row in result.fetchall()]
         
+        # Handle selected_sources parameter - filter which sources to use
+        selected_source_ids = request.selected_sources or []
+        if selected_source_ids:
+            logger.info(
+                "Using selected sources filter",
+                selected_sources_count=len(selected_source_ids),
+                selected_source_ids=selected_source_ids,
+                user_id=self.user_id
+            )
+            # Only use the explicitly selected sources (no user sources, only selected ones)
+            # But still include bot sources if bots are selected
+            combined_source_ids = list(set(selected_source_ids + bot_source_ids))
+        else:
+            # Fallback to old behavior if no sources selected - use all user sources + bot sources
+            logger.info(
+                "No selected sources - using all user sources + bot sources",
+                bot_sources_count=len(bot_source_ids),
+                user_id=self.user_id
+            )
+            combined_source_ids = bot_source_ids  # Only bot sources, no user sources unless explicitly selected
+        
         # Create and load fast agent from database cache
         try:
             fast_agent = FastMCPAgent()
             logger.info("FastMCPAgent created", user_id=self.user_id)
             
-            total_tools_loaded = await fast_agent.load_tools_from_cache(
+            # Load tools with filtered source IDs
+            total_tools_loaded = await fast_agent.load_tools_for_specific_sources(
                 db=self.db,
                 user_id=self.user_id,
-                bot_source_ids=bot_source_ids
+                source_ids=combined_source_ids  # Use filtered source list
             )
-            logger.info("Tools loaded", tools_count=total_tools_loaded, user_id=self.user_id)
+            logger.info(
+                "Tools loaded with source filtering", 
+                tools_count=total_tools_loaded, 
+                source_ids_used=combined_source_ids,
+                selected_sources_count=len(selected_source_ids),
+                bot_sources_count=len(bot_source_ids),
+                user_id=self.user_id
+            )
             
         except Exception as e:
             logger.error("Fast agent loading failed", error=str(e), user_id=self.user_id)
@@ -248,7 +277,7 @@ class ProductionModeHandler:
         
         # Handle case with no tools available
         if total_tools_loaded == 0:
-            response = await self._generate_no_tools_response(active_bot_ids, request.message)
+            response = await self._generate_no_tools_response(active_bot_ids, request.message, selected_source_ids)
             yield {
                 "type": "final_response",
                 "content": response,
@@ -259,31 +288,34 @@ class ProductionModeHandler:
                     "total_tools_called": 0,
                     "query_type": "no_tools",
                     "response_time_ms": 0,
-                    "sources_found": 0
+                    "sources_found": 0,
+                    "selected_sources_count": len(selected_source_ids)
                 }
             }
             return
         
         # We have tools - proceed with normal execution
         logger.info(
-            "Fast tools loaded from database cache",
+            "Fast tools loaded from database cache with source filtering",
             total_tools=total_tools_loaded,
             bot_sources=len(bot_source_ids),
+            selected_sources=len(selected_source_ids),
             loaded_sources=len(fast_agent.loaded_sources),
             user_id=self.user_id
         )
         
         yield {
             "type": "status", 
-            "message": f"Fast-loaded {total_tools_loaded} tools from cache..."
+            "message": f"Loaded {total_tools_loaded} tools from {len(selected_source_ids) if selected_source_ids else 'all'} selected sources..."
         }
         
         yield {
             "type": "tools_loaded",
             "tool_count": total_tools_loaded,
             "bot_sources": len(bot_source_ids),
+            "selected_sources": len(selected_source_ids),
             "loaded_sources": len(fast_agent.loaded_sources),
-            "source_type": "fast_database_cached",
+            "source_type": "filtered_database_cached",
             "test_mode": False
         }
         
@@ -307,10 +339,28 @@ class ProductionModeHandler:
                 "error": f"Query processing failed: {str(e)}"
             }
     
-    async def _generate_no_tools_response(self, active_bot_ids: List[uuid.UUID], message: str) -> str:
+    async def _generate_no_tools_response(self, active_bot_ids: List[uuid.UUID], message: str, selected_source_ids: List[uuid.UUID] = None) -> str:
         """Generate helpful response when no tools are available"""
         
-        if active_bot_ids:
+        if selected_source_ids and len(selected_source_ids) > 0:
+            return f"""I understand you're asking: "{message}"
+
+However, I don't have access to tools from the {len(selected_source_ids)} selected source(s). This could be because:
+
+1. **Sources Not Ready**: The selected sources haven't cached their tools yet
+2. **No Tools Available**: The selected sources don't have any tools configured  
+3. **Access Issues**: The selected sources might not be accessible or have connection problems
+4. **MCP Server Issues**: The Model Context Protocol servers for these sources aren't responding
+
+**What you can do:**
+- Try selecting different sources from the source selector
+- Go to the **Sources** section to check source status and refresh tools
+- Wait a moment and try again (sources might be caching tools)
+- Check with your administrator about the selected source configurations
+
+You can also clear your source selection to use all available sources, or try asking a general question."""
+
+        elif active_bot_ids:
             return f"""I understand you're asking: "{message}"
 
 However, I don't currently have access to any knowledge sources or tools to provide specific information. This could be because:
@@ -331,20 +381,24 @@ I can still help with general questions that don't require specific knowledge ba
 
 I don't currently have access to specific knowledge sources to answer this question. Here's how to get better results:
 
-**Option 1: Use Bots with Knowledge Sources**
+**Option 1: Select Sources**
+- Use the **Sources** dropdown to select specific knowledge sources
+- Only tools from selected sources will be used for your query
+
+**Option 2: Use Bots with Knowledge Sources**
 - Go to the **Bots** section to create or use existing bots
 - Mention bots in your query using `@botname` to access their knowledge
 - Each bot can have specific data sources configured
 
-**Option 2: Configure Knowledge Sources**  
+**Option 3: Configure Knowledge Sources**  
 - Visit the **Sources** section to add knowledge bases
 - Connect document repositories, databases, or other data sources
 - Configure access credentials for your knowledge systems
 
-**Option 3: Ask General Questions**
+**Option 4: Ask General Questions**
 I can help with general information that doesn't require specific knowledge base access.
 
-Try mentioning a bot (like `@mybotname what is xinet?`) or configure some knowledge sources first!"""
+Try selecting some sources first, then ask your question again!"""
 
 
 class QueryHandler:

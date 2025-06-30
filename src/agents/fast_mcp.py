@@ -688,13 +688,89 @@ class FastMCPToolManager:
             logger.warning("No cached sources found for tool loading")
             return 0
         
+        return await self._load_tools_from_sources(db, all_sources)
+    
+    async def load_tools_for_specific_sources(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        source_ids: List[uuid.UUID]
+    ) -> int:
+        """
+        Load tools from database cache for specific source IDs only
+        
+        Args:
+            db: Database session
+            user_id: User ID (for access control)
+            source_ids: Specific source IDs to load tools from
+            
+        Returns:
+            Number of tools loaded
+        """
+        if not source_ids:
+            logger.info("No source IDs provided - loading no tools")
+            return 0
+        
+        # Get sources by IDs with access control - user must have access to these sources
+        sources_query = select(Source).where(
+            Source.source_id.in_(source_ids),
+            Source.is_active.is_(True),
+            Source.tools_cache_status == "cached"
+        ).where(
+            # User has access if they own it, it's public, it's shared with them, or it's a bot source
+            (Source.owner_user_id == user_id) |  # User owns it
+            (Source.is_public == True) |  # Public source
+            (Source.owner_bot_id != None)  # Bot-owned source (accessible to all users)
+            # TODO: Add proper sharing check via SourceShare table if needed
+        )
+        
+        sources_result = await db.execute(sources_query)
+        filtered_sources = sources_result.scalars().all()
+        
+        logger.info(
+            "Filtered sources for specific source loading",
+            requested_sources=len(source_ids),
+            accessible_sources=len(filtered_sources),
+            accessible_source_ids=[s.source_id for s in filtered_sources],
+            user_id=user_id
+        )
+        
+        if not filtered_sources:
+            logger.warning(
+                "No accessible sources found for requested IDs",
+                requested_source_ids=source_ids,
+                user_id=user_id
+            )
+            return 0
+        
+        return await self._load_tools_from_sources(db, filtered_sources)
+    
+    async def _load_tools_from_sources(
+        self,
+        db: AsyncSession,
+        sources: List[Source]
+    ) -> int:
+        """
+        Common method to load tools from a list of source objects
+        
+        Args:
+            db: Database session
+            sources: List of Source objects to load tools from
+            
+        Returns:
+            Number of tools loaded
+        """
+        if not sources:
+            logger.warning("No sources provided for tool loading")
+            return 0
+        
         # Store sources for instruction retrieval
-        self.sources = all_sources
+        self.sources = sources
         
         # Build server configs 
         self.server_configs = []
         
-        for source in all_sources:
+        for source in sources:
             # Extract source attributes
             source_id = source.source_id
             source_name = source.name
@@ -741,13 +817,12 @@ class FastMCPToolManager:
             self.tools.append(langchain_tool)
         
         logger.info(
-            "FastMCP tools loaded from database cache",
+            "FastMCP tools loaded from sources",
             total_tools=len(self.tools),
             cached_tools_found=len(cached_tools),
             tools_skipped=len(cached_tools) - len(self.tools),
             source_count=len(self.server_configs),
-            user_sources=len(user_sources),
-            bot_sources=len(bot_sources)
+            sources_used=len(sources)
         )
         
         return len(self.tools)

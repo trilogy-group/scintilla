@@ -374,6 +374,13 @@ function App() {
       })
     }
     
+    // Transfer source selections from landing page to main chat
+    if (options.selected_sources && options.selected_sources.length > 0) {
+      // The source selector hook should handle this automatically since it uses localStorage
+      // But we might need to trigger a reload of the source selector state
+      console.log('Transferring source selections from landing page:', options.selected_sources)
+    }
+    
     setQuery('') // Clear the query input in main chat
     
     // Always start a new conversation from landing page
@@ -389,6 +396,7 @@ function App() {
         stream: true,
         use_user_sources: true,
         bot_ids: options.bot_ids || [],
+        selected_sources: options.selected_sources || [],  // Pass source selections
         selectedBots: options.selectedBots || []  // Pass bot information for display
       })
     }

@@ -245,7 +245,10 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                   Or start a conversation without a specific question
                 </p>
                 <button
-                  onClick={() => onSearch('')}
+                  onClick={() => onSearch('', { 
+                    selected_sources: getSelectedSourceIds(),
+                    selectedBots: selectedBots
+                  })}
                   className="inline-flex items-center space-x-2 px-8 py-3 bg-scintilla-500 text-white text-lg font-medium rounded-xl hover:bg-scintilla-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-1 hover:scale-105"
                 >
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -258,7 +261,10 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
               {/* Feature highlights - Now functional navigation cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
                 <button
-                  onClick={() => onSearch('')}
+                  onClick={() => onSearch('', { 
+                    selected_sources: getSelectedSourceIds(),
+                    selectedBots: selectedBots
+                  })}
                   className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:border-scintilla-200 dark:hover:border-scintilla-700 transition-all duration-200 group transform hover:-translate-y-1 hover:scale-105"
                 >
                   <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4 group-hover:bg-scintilla-200 dark:group-hover:bg-scintilla-800 transition-colors">
@@ -276,7 +282,10 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                 </button>
 
                 <button
-                  onClick={() => onNavigate ? onNavigate('sources') : onSearch('')}
+                  onClick={() => onNavigate ? onNavigate('sources') : onSearch('', { 
+                    selected_sources: getSelectedSourceIds(),
+                    selectedBots: selectedBots
+                  })}
                   className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:border-scintilla-200 dark:hover:border-scintilla-700 transition-all duration-200 group transform hover:-translate-y-1 hover:scale-105"
                 >
                   <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4 group-hover:bg-scintilla-200 dark:group-hover:bg-scintilla-800 transition-colors">
@@ -296,7 +305,10 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                 </button>
 
                 <button
-                  onClick={() => onNavigate ? onNavigate('bots') : onSearch('')}
+                  onClick={() => onNavigate ? onNavigate('bots') : onSearch('', { 
+                    selected_sources: getSelectedSourceIds(),
+                    selectedBots: selectedBots
+                  })}
                   className="p-6 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:border-scintilla-200 dark:hover:border-scintilla-700 transition-all duration-200 group transform hover:-translate-y-1 hover:scale-105"
                 >
                   <div className="w-12 h-12 bg-scintilla-100 dark:bg-scintilla-900 rounded-lg flex items-center justify-center mx-auto mb-4 group-hover:bg-scintilla-200 dark:group-hover:bg-scintilla-800 transition-colors">
