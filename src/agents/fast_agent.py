@@ -262,10 +262,14 @@ class FastMCPAgent:
         # Build source-specific instructions section
         instructions_section = ""
         if self.source_instructions:
-            instructions_section = "\n\nSOURCE-SPECIFIC INSTRUCTIONS:\n"
+            instructions_section = "\n\n🔒 CRITICAL SOURCE-SPECIFIC INSTRUCTIONS:\n"
+            instructions_section += "These instructions are MANDATORY and must be followed strictly:\n\n"
             for source_name, instructions in self.source_instructions.items():
                 if instructions:  # Only include if instructions exist
-                    instructions_section += f"\n**{source_name}:**\n{instructions}\n"
+                    instructions_section += f"**{source_name}:**\n{instructions}\n\n"
+            
+            instructions_section += "⚠️ FAILURE TO FOLLOW THESE INSTRUCTIONS IS NOT ACCEPTABLE ⚠️\n"
+            instructions_section += "Always validate your response against these requirements before responding.\n"
         
         return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
