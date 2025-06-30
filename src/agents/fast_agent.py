@@ -437,6 +437,17 @@ Be intelligent about tool usage - search when information is needed, respond dir
             return
         
         try:
+            # PREPROCESS QUERY: Incorporate bot instructions into the query itself
+            original_message = message
+            message = await self._preprocess_query_with_instructions(message)
+            
+            if message != original_message:
+                yield {
+                    "type": "query_preprocessed",
+                    "original_query": original_message,
+                    "modified_query": message
+                }
+            
             # Initialize components
             llm = self._create_llm(llm_provider, llm_model)
             llm_with_tools = llm.bind_tools(search_tools)
@@ -890,69 +901,101 @@ Please provide your response with proper citations based on the tool results."""
         return sources
 
     async def _validate_and_fix_response(self, llm, final_content, citation_guidance, all_tool_metadata):
-        """Use LLM intelligence to validate and fix citations, URLs, and formatting"""
-        
-        # Build URL mapping for validation
-        url_mapping = {}
-        ticket_mapping = {}
-        
-        for meta in all_tool_metadata:
-            metadata = meta['metadata']
-            urls = metadata.get('urls', [])
-            identifiers = metadata.get('identifiers', {})
-            
-            if urls and identifiers.get('primary_ticket'):
-                primary_url = urls[0]
-                primary_ticket = identifiers['primary_ticket']
-                ticket_mapping[primary_ticket] = primary_url
-                url_mapping[primary_ticket] = primary_url
-                
-                # Add all tickets if available
-                if identifiers.get('tickets'):
-                    for ticket in identifiers['tickets'].split(','):
-                        if ticket and ticket not in ticket_mapping:
-                            if 'jira' in metadata.get('source_type', ''):
-                                base_url = primary_url.rsplit('/browse/', 1)[0]
-                                ticket_mapping[ticket] = f"{base_url}/browse/{ticket}"
-        
-        # Create validation prompt
-        validation_prompt = f"""You are a citation and formatting validator. Please review and fix the following response to ensure:
+        """Use LLM intelligence to validate and fix common issues in responses"""
+        validation_prompt = f"""Please review and fix any issues in this response:
 
-1. **Citation Accuracy**: All [1], [2], [3] references correspond to the provided sources
-2. **URL Formatting**: Fix any malformed URLs and markdown links
-3. **No Nested Links**: Remove nested or malformed markdown like [[text](url)](url)
-4. **Citation Usage**: Add proper [1], [2], [3] citations when referencing specific source information
-5. **Plain Ticket IDs**: Keep ticket IDs as plain text (PDR-148559), remove any markdown links around them
-6. **Citation Order**: Ensure citations appear in order [1], [2], [3], [4], [5] matching the source list
-
-AVAILABLE SOURCES:
-{citation_guidance}
-
-TICKET TO URL MAPPING:
-{chr(10).join([f"{ticket} -> {url}" for ticket, url in ticket_mapping.items()])}
-
-RESPONSE TO VALIDATE:
+ORIGINAL RESPONSE:
 {final_content}
 
-VALIDATION RULES:
-- Fix any malformed markdown links (nested links, broken syntax)
-- Add [1], [2], [3] citations when mentioning specific information from sources
-- Convert clickable ticket IDs to plain text: [PDR-148559](url) -> PDR-148559
-- Remove nested links like [[text](url)](url)
-- Ensure citations match the source numbers above and appear in order
-- If mentioning 5 tickets, should have [1], [2], [3], [4], [5] citations
-- Keep the same information, just improve citations and fix formatting
-- Do not add your own sources section
+AVAILABLE CITATION INFORMATION:
+{citation_guidance}
 
-Please provide the corrected response:"""
+COMMON ISSUES TO FIX:
+1. Broken or malformed URLs - remove or fix them
+2. Missing citations for specific claims - add appropriate [1], [2], [3] citations
+3. Incorrect citation numbers - match them to the source list above
+4. Redundant or duplicate information
+5. Poor formatting or structure
+
+Please return the corrected response with proper citations. Keep the same tone and content, just fix technical issues."""
 
         try:
             validation_response = await llm.ainvoke([HumanMessage(content=validation_prompt)])
             validated_content = validation_response.content.strip()
             
-            logger.info("✅ LLM validation completed successfully")
-            return validated_content
-            
+            # Basic sanity check - don't replace if validation made it much shorter/longer
+            if len(validated_content) < len(final_content) * 0.5:
+                logger.warning("Validation made response too short, keeping original")
+                return final_content
+            elif len(validated_content) > len(final_content) * 2:
+                logger.warning("Validation made response too long, keeping original") 
+                return final_content
+            else:
+                logger.info("Response validated and potentially improved")
+                return validated_content
+                
         except Exception as e:
-            logger.warning(f"⚠️  LLM validation failed: {e}, using original content")
+            logger.warning(f"Response validation failed: {e}, keeping original")
             return final_content
+
+    async def _preprocess_query_with_instructions(self, user_query: str) -> str:
+        """
+        Preprocess user query to incorporate bot instructions automatically
+        Uses a lightweight LLM to intelligently modify the query based on source instructions
+        """
+        if not self.source_instructions:
+            return user_query
+        
+        # Build instruction context for preprocessing
+        instruction_context = []
+        for source_name, instructions in self.source_instructions.items():
+            if instructions and ('project' in instructions.lower() or 'space' in instructions.lower()):
+                instruction_context.append(f"**{source_name}**: {instructions}")
+        
+        if not instruction_context:
+            return user_query
+        
+        # Create preprocessing prompt
+        preprocessing_prompt = f"""You are a query preprocessor. Your job is to modify user queries to automatically include required filters based on source instructions.
+
+SOURCE INSTRUCTIONS:
+{chr(10).join(instruction_context)}
+
+TASK: Modify the user's query to automatically include the required filters. Make it sound natural.
+
+EXAMPLES:
+- "what tickets we have" → "what tickets we have in XINETBSE project"
+- "open tickets" → "open XINETBSE tickets" 
+- "show me bugs" → "show me bugs in XINETBSE project"
+- "confluence pages about X" → "confluence pages about X in XINET space"
+
+USER QUERY: "{user_query}"
+
+MODIFIED QUERY (make it natural and specific):"""
+
+        try:
+            # Use a lightweight LLM for preprocessing (faster/cheaper)
+            preprocessing_llm = self._create_llm("anthropic", "claude-3-5-haiku-20241022")
+            
+            response = await preprocessing_llm.ainvoke([HumanMessage(content=preprocessing_prompt)])
+            modified_query = response.content.strip()
+            
+            # Validation checks
+            if len(modified_query) > len(user_query) * 3:  # Prevent runaway responses
+                logger.warning("Query preprocessing resulted in overly long query, using original")
+                return user_query
+            
+            if len(modified_query) < 3:  # Prevent empty responses
+                logger.warning("Query preprocessing resulted in too short query, using original") 
+                return user_query
+            
+            # Only use modified query if it's meaningfully different
+            if modified_query.lower().strip() != user_query.lower().strip():
+                logger.info(f"🔄 Query preprocessed: '{user_query}' → '{modified_query}'")
+                return modified_query
+            else:
+                return user_query
+                
+        except Exception as e:
+            logger.warning(f"Query preprocessing failed: {e}, using original query")
+            return user_query
