@@ -34,6 +34,12 @@ export const useSourceSelector = () => {
       console.log('Loading available sources for query selection...')
       const data = await api.getAvailableSourcesForQuery()
       console.log('Loaded available sources:', data.length)
+      console.log('Source data details:', data.map(s => ({ 
+        id: s.source_id, 
+        name: s.name, 
+        nameType: typeof s.name,
+        nameLength: s.name ? s.name.length : 'null/undefined'
+      })))
       setAvailableSources(data)
     } catch (error) {
       console.error('Failed to load available sources:', error)
@@ -137,17 +143,33 @@ export const SelectedSourcesChips = ({ selectedSources, onToggleSource, classNam
       {selectedSources.map((source) => (
         <div
           key={source.source_id}
-          className="inline-flex items-center space-x-2 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-3 py-1.5 rounded-full text-sm border border-purple-200 dark:border-purple-800"
+          className="inline-flex items-center space-x-2 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-3 py-1.5 rounded-full text-sm border border-blue-200 dark:border-blue-800"
         >
-          <div className="w-4 h-4 bg-gradient-to-r from-purple-500 to-indigo-600 rounded-full flex items-center justify-center flex-shrink-0">
+          <div className="w-4 h-4 bg-gradient-to-r from-blue-500 to-blue-600 rounded-sm flex items-center justify-center flex-shrink-0">
             <svg className="h-2.5 w-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
             </svg>
           </div>
-          <span className="font-medium">{source.name}</span>
+          <span className="font-medium">{source.name || '[Unnamed Source]'}</span>
+          
+          {/* Source Type Indicator in chip */}
+          {source.is_public ? (
+            <svg className="h-3 w-3 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Public">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          ) : source.is_shared_with_user ? (
+            <svg className="h-3 w-3 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Shared">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+            </svg>
+          ) : (
+            <svg className="h-3 w-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Private">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          )}
+          
           <button
             onClick={() => onToggleSource(source)}
-            className="text-purple-500 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-200 transition-colors"
+            className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-200 transition-colors"
           >
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -171,22 +193,32 @@ export const SourceSelectorDropdown = ({
 }) => {
   if (!showSourceSelector) return null
 
+  // Calculate dynamic width based on longest source name
+  const maxSourceNameLength = availableSources.reduce((max, source) => {
+    const name = source.name || '[Unnamed Source]'
+    return Math.max(max, name.length)
+  }, 20) // Minimum width
+
+  // Estimate width: roughly 8px per character + padding + icon space
+  const estimatedWidth = Math.min(Math.max(maxSourceNameLength * 8 + 80, 200), 400)
+
   return (
     <div 
       data-source-selector="true"
-      className={`absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-80 overflow-hidden ${className}`}
+      className={`absolute bottom-full left-0 mb-2 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 max-h-80 overflow-hidden ${className}`}
+      style={{ width: `${estimatedWidth}px` }}
       onMouseDown={(e) => {
         e.preventDefault() // Prevent losing focus
       }}
     >
       <div className="p-3">
         <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <div className="text-sm font-medium text-gray-300">
             Select Sources ({selectedSources.length} selected)
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="text-gray-400 hover:text-gray-300"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -197,10 +229,10 @@ export const SourceSelectorDropdown = ({
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-600"></div>
-            <span className="ml-2 text-sm text-gray-500">Loading sources...</span>
+            <span className="ml-2 text-sm text-gray-400">Loading sources...</span>
           </div>
         ) : availableSources.length === 0 ? (
-          <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
+          <div className="text-center py-8 text-sm text-gray-400">
             No sources available
           </div>
         ) : (
@@ -212,53 +244,55 @@ export const SourceSelectorDropdown = ({
                 <div
                   key={source.source_id}
                   onClick={() => onToggleSource(source)}
-                  className={`flex items-center space-x-3 px-3 py-2 cursor-pointer rounded-md transition-colors ${
-                    isSelected
-                      ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300'
-                      : 'hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-white'
-                  }`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    margin: '2px 0',
+                    backgroundColor: isSelected ? '#4c1d95' : '#374151',
+                    border: '1px solid #6b7280',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500'
+                  }}
                 >
-                  <div className="flex-shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => {}} // Handled by parent click
-                      className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                    />
-                  </div>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => {}}
+                    style={{ marginRight: '8px' }}
+                  />
                   
-                  <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-indigo-600 rounded-full flex items-center justify-center flex-shrink-0">
-                    <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  {/* Source Icon */}
+                  <div className="w-6 h-6 bg-gradient-to-r from-blue-500 to-blue-600 rounded-md flex items-center justify-center flex-shrink-0 mr-2">
+                    <svg className="h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
                   </div>
-                  
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">
-                      {source.name}
-                    </div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {source.owner_type === 'user' 
-                        ? source.is_shared_with_user 
-                          ? 'Shared with you' 
-                          : source.is_public 
-                            ? 'Public source' 
-                            : 'Your source'
-                        : 'Bot source'
-                      } • {source.cached_tool_count || 0} tools
-                    </div>
+
+                  <div style={{ flex: 1 }}>
+                    <span style={{ color: '#f3f4f6' }}>
+                      {source.name || '[Unnamed Source]'}
+                    </span>
                   </div>
-                  
-                  {source.tools_cache_status && (
-                    <div className="flex-shrink-0">
-                      <div className={`w-2 h-2 rounded-full ${
-                        source.tools_cache_status === 'cached' ? 'bg-green-500' :
-                        source.tools_cache_status === 'pending' ? 'bg-yellow-500' :
-                        source.tools_cache_status === 'error' ? 'bg-red-500' :
-                        'bg-gray-400'
-                      }`} />
-                    </div>
-                  )}
+
+                  {/* Source Type Indicator */}
+                  <div className="flex items-center ml-2">
+                    {source.is_public ? (
+                      <svg className="h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Public Source">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    ) : source.is_shared_with_user ? (
+                      <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Shared with you">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                      </svg>
+                    ) : (
+                      <svg className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Private Source">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    )}
+                  </div>
                 </div>
               )
             })}

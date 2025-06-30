@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 import structlog
 
 from src.db.base import get_db_session
-from src.db.models import User, Source, SourceTool, Bot, UserBotAccess, BotSourceAssociation
+from src.db.models import User, Source, SourceTool, Bot, UserBotAccess, BotSourceAssociation, SourceShare
 from src.auth.google_oauth import get_current_user
 from src.api.models import SourceCreate, SourceResponse, RefreshResponse, ErrorResponse
 from src.db.mcp_credentials import store_source_credentials, get_user_sources_with_credentials, MCPCredentialManager
