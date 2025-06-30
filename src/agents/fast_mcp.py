@@ -758,9 +758,20 @@ class FastMCPToolManager:
         from typing import Optional, Any
         
         # Extract tool metadata
-        tool_name = cached_tool.tool_name
-        tool_description = cached_tool.tool_description or f"Tool {tool_name} from {server_config.name}"
+        original_tool_name = cached_tool.tool_name
+        tool_description = cached_tool.tool_description or f"Tool {original_tool_name} from {server_config.name}"
         tool_schema = cached_tool.tool_schema or {}
+        
+        # Create namespaced tool name to avoid conflicts between sources
+        # Convert source name to safe identifier (replace spaces/special chars with underscores)
+        safe_source_name = "".join(c if c.isalnum() else "_" for c in server_config.name.lower())
+        safe_source_name = safe_source_name.strip("_")  # Remove leading/trailing underscores
+        
+        # Create namespaced tool name: source_toolname
+        namespaced_tool_name = f"{safe_source_name}_{original_tool_name}"
+        
+        # Update description to indicate source
+        enhanced_description = f"[{server_config.name}] {tool_description}"
         
         # Get schema properties
         properties = tool_schema.get("properties", {})
@@ -798,27 +809,28 @@ class FastMCPToolManager:
         
         # Create dynamic Pydantic model
         if pydantic_fields:
-            args_schema = create_model(f"{tool_name}Args", **pydantic_fields)
+            args_schema = create_model(f"{namespaced_tool_name}Args", **pydantic_fields)
         else:
             # Handle tools with missing/empty schemas - assume they take no parameters
-            args_schema = create_model(f"{tool_name}Args")  # Empty model = no parameters
+            args_schema = create_model(f"{namespaced_tool_name}Args")  # Empty model = no parameters
             
             if tool_schema is None:
-                logger.info(f"🔧 Tool {tool_name} has no schema (None) - creating no-parameter tool")
+                logger.info(f"🔧 Tool {namespaced_tool_name} has no schema (None) - creating no-parameter tool")
             elif tool_schema == {}:
-                logger.info(f"🔧 Tool {tool_name} has empty schema ({{}}) - creating no-parameter tool")
+                logger.info(f"🔧 Tool {namespaced_tool_name} has empty schema ({{}}) - creating no-parameter tool")
             else:
-                logger.info(f"🔧 Tool {tool_name} has schema with no properties - creating no-parameter tool")
+                logger.info(f"🔧 Tool {namespaced_tool_name} has schema with no properties - creating no-parameter tool")
         
         # Create dynamic tool function
         async def tool_func(**kwargs) -> str:
             """Dynamic tool function that calls FastMCP"""
-            logger.info(f"🔧 PROPER TOOL CALL: {tool_name} with {kwargs}")
+            logger.info(f"🔧 NAMESPACED TOOL CALL: {namespaced_tool_name} -> {original_tool_name} with {kwargs}")
             
+            # Call the original tool name on the MCP server
             result = await FastMCPService.call_tool(
                 server_url=server_config.server_url,
                 auth_headers=server_config.auth_headers,
-                tool_name=tool_name,
+                tool_name=original_tool_name,  # Use original name for MCP server
                 arguments=kwargs
             )
             
@@ -831,15 +843,16 @@ class FastMCPToolManager:
         from langchain.tools import StructuredTool
         
         return StructuredTool(
-            name=tool_name,
-            description=tool_description,
+            name=namespaced_tool_name,  # Use namespaced name for LangChain
+            description=enhanced_description,  # Enhanced description with source info
             func=tool_func,
             coroutine=tool_func,  # For async execution
             args_schema=args_schema,  # Properly handles empty schemas
             metadata={
                 'source_id': server_config.source_id,
                 'source_name': server_config.name,
-                'server_url': server_config.server_url
+                'server_url': server_config.server_url,
+                'original_tool_name': original_tool_name  # Store original name for reference
             }
         )
     
