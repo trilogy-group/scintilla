@@ -70,7 +70,8 @@ function App() {
     getSelectedSourceIds,
     toggleSelector,
     closeSelector,
-    loadAvailableSources
+    loadAvailableSources,
+    reloadSelectedSources
   } = useSourceSelector()
 
   const { 
@@ -201,7 +202,7 @@ function App() {
       // Explicitly load available sources for the source selector
       loadAvailableSources()
     }
-  }, [currentView, loadBotsForAutoComplete, loadConversations, loadAvailableSources, isAuthenticated, authLoading, showLanding])
+  }, [currentView, loadBotsForAutoComplete, loadConversations, loadAvailableSources, reloadSelectedSources, isAuthenticated, authLoading, showLanding])
 
   // Handle input change for auto-complete
   const handleInputChange = (e) => {
@@ -383,9 +384,11 @@ function App() {
     
     // Transfer source selections from landing page to main chat
     if (options.selected_sources && options.selected_sources.length > 0) {
-      // The source selector hook should handle this automatically since it uses localStorage
-      // But we might need to trigger a reload of the source selector state
       console.log('Transferring source selections from landing page:', options.selected_sources)
+      // Force reload selected sources from localStorage since the hook is already mounted
+      setTimeout(() => {
+        reloadSelectedSources()
+      }, 100) // Small delay to ensure chat view is active
     }
     
     setQuery('') // Clear the query input in main chat

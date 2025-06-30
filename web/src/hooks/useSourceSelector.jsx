@@ -116,6 +116,26 @@ export const useSourceSelector = () => {
     setShowSourceSelector(false)
   }, [])
 
+  // Manually reload selected sources from localStorage
+  const reloadSelectedSources = useCallback(() => {
+    console.log('Manually reloading selected sources from localStorage')
+    const savedSelection = localStorage.getItem('scintilla_selected_sources')
+    if (savedSelection) {
+      try {
+        const parsed = JSON.parse(savedSelection)
+        console.log('Reloaded source selections:', parsed.length, parsed.map(s => s.name))
+        setSelectedSources(parsed)
+      } catch (error) {
+        console.error('Failed to parse saved source selection during reload:', error)
+        localStorage.removeItem('scintilla_selected_sources')
+        setSelectedSources([])
+      }
+    } else {
+      console.log('No saved source selections found in localStorage')
+      setSelectedSources([])
+    }
+  }, [])
+
   return {
     // State
     availableSources,
@@ -130,7 +150,8 @@ export const useSourceSelector = () => {
     clearSelectedSources,
     getSelectedSourceIds,
     toggleSelector,
-    closeSelector
+    closeSelector,
+    reloadSelectedSources
   }
 }
 
