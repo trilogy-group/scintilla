@@ -69,7 +69,8 @@ function App() {
     clearSelectedSources,
     getSelectedSourceIds,
     toggleSelector,
-    closeSelector
+    closeSelector,
+    loadAvailableSources
   } = useSourceSelector()
 
   const { 
@@ -195,10 +196,12 @@ function App() {
     }
     
     if (currentView === 'chat') {
-      console.log('Chat view activated, loading conversations')
+      console.log('Chat view activated, loading conversations and sources')
       loadConversations()
+      // Explicitly load available sources for the source selector
+      loadAvailableSources()
     }
-  }, [currentView, loadBotsForAutoComplete, loadConversations, isAuthenticated, authLoading, showLanding])
+  }, [currentView, loadBotsForAutoComplete, loadConversations, loadAvailableSources, isAuthenticated, authLoading, showLanding])
 
   // Handle input change for auto-complete
   const handleInputChange = (e) => {
@@ -248,6 +251,10 @@ function App() {
       selected_sources: getSelectedSourceIds(),
       selectedBots: selectedBots  // Pass bot information for display
     })
+    
+    // Force reload sources after query to ensure they remain available
+    console.log('Reloading sources after query submission')
+    loadAvailableSources()
   }
 
   const handleLoadConversation = async (conversationId) => {
