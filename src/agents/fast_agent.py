@@ -259,7 +259,7 @@ class FastMCPAgent:
         tools_context = "\n".join(tools_info)
         server_context = ", ".join(self.loaded_sources)
         
-        # Build source-specific instructions section
+        # Build source-specific instructions section with validation emphasis
         instructions_section = ""
         if self.source_instructions:
             instructions_section = "\n\n🔒 CRITICAL SOURCE-SPECIFIC INSTRUCTIONS:\n"
@@ -270,6 +270,9 @@ class FastMCPAgent:
             
             instructions_section += "⚠️ FAILURE TO FOLLOW THESE INSTRUCTIONS IS NOT ACCEPTABLE ⚠️\n"
             instructions_section += "Always validate your response against these requirements before responding.\n"
+            instructions_section += "\n🔍 SEARCH VALIDATION REQUIREMENT:\n"
+            instructions_section += "Before calling any search tool, check if source-specific filters need to be automatically applied.\n"
+            instructions_section += "If instructions specify mandatory project/space filters, include them in EVERY search.\n"
         
         return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
