@@ -305,6 +305,9 @@ class FastMCPAgent:
             instructions_section += "\n🔍 SEARCH VALIDATION REQUIREMENT:\n"
             instructions_section += "Before calling any search tool, check if source-specific filters need to be automatically applied.\n"
             instructions_section += "If instructions specify mandatory project/space filters, include them in EVERY search.\n"
+            instructions_section += "\n📊 DATA COUNT REQUIREMENT:\n"
+            instructions_section += "When counting items (tickets, documents, etc.), ALWAYS read count fields like 'total', 'count', or 'size' from responses.\n"
+            instructions_section += "Individual items may be limited for display, but count fields show the actual totals.\n"
         
         return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
@@ -944,7 +947,7 @@ Please provide your response with proper citations based on the tool results."""
 
     async def _validate_and_fix_response(self, llm, final_content, citation_guidance, all_tool_metadata):
         """Use LLM intelligence to validate and fix common issues in responses"""
-        validation_prompt = f"""Please review and fix any issues in this response:
+        validation_prompt = f"""Fix any issues in this response and return ONLY the corrected content without explanations.
 
 ORIGINAL RESPONSE:
 {final_content}
@@ -952,14 +955,14 @@ ORIGINAL RESPONSE:
 AVAILABLE CITATION INFORMATION:
 {citation_guidance}
 
-COMMON ISSUES TO FIX:
+ISSUES TO FIX:
 1. Broken or malformed URLs - remove or fix them
-2. Missing citations for specific claims - add appropriate [1], [2], [3] citations
+2. Missing citations - add appropriate [1], [2], [3] citations
 3. Incorrect citation numbers - match them to the source list above
 4. Redundant or duplicate information
 5. Poor formatting or structure
 
-Please return the corrected response with proper citations. Keep the same tone and content, just fix technical issues."""
+CRITICAL: Return ONLY the corrected response content. Do NOT add sections like "Issues Fixed:", explanations, or meta-commentary about what was changed. Just provide the clean, corrected response."""
 
         try:
             validation_response = await llm.ainvoke([HumanMessage(content=validation_prompt)])
@@ -1005,22 +1008,27 @@ Please return the corrected response with proper citations. Keep the same tone a
         logger.info("✅ Building preprocessing prompt", instruction_sources=len(instruction_context))
         
         # Create preprocessing prompt
-        preprocessing_prompt = f"""You are a query preprocessor. Your job is to modify user queries to automatically include required filters based on source instructions.
+        preprocessing_prompt = f"""You are a query preprocessor. Add ONLY the required filters to the user's query. Keep it brief and natural.
 
 SOURCE INSTRUCTIONS:
 {chr(10).join(instruction_context)}
 
-TASK: Modify the user's query to automatically include the required filters. Make it sound natural.
+TASK: Add required filters to the query. Return ONLY the modified query, nothing else.
 
 EXAMPLES:
 - "what tickets we have" → "what tickets we have in XINETBSE project"
-- "open tickets" → "open XINETBSE tickets" 
+- "open tickets" → "open XINETBSE tickets"
 - "show me bugs" → "show me bugs in XINETBSE project"
-- "confluence pages about X" → "confluence pages about X in XINET space"
+
+REQUIREMENTS:
+- Maximum 3x the length of original query
+- Only add necessary filters
+- Keep it natural and conversational
+- Return ONLY the modified query
 
 USER QUERY: "{user_query}"
 
-MODIFIED QUERY (make it natural and specific):"""
+MODIFIED QUERY:"""
 
         logger.debug("📝 Preprocessing prompt created", prompt_length=len(preprocessing_prompt))
 
@@ -1040,7 +1048,10 @@ MODIFIED QUERY (make it natural and specific):"""
             # Validation checks
             if len(modified_query) > len(user_query) * 3:  # Prevent runaway responses
                 logger.warning("❌ Query preprocessing resulted in overly long query, using original", 
-                              ratio=len(modified_query) / len(user_query))
+                              original_length=len(user_query),
+                              modified_length=len(modified_query),
+                              ratio=len(modified_query) / len(user_query),
+                              max_allowed_ratio=3.0)
                 return user_query
             
             if len(modified_query) < 3:  # Prevent empty responses
