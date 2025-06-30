@@ -43,6 +43,7 @@ class MessageResponse(BaseModel):
     tools_used: Optional[List] = None
     citations: Optional[List] = None
     selected_bots: Optional[List] = None
+    selected_sources: Optional[List] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     created_at: datetime
@@ -155,6 +156,7 @@ async def get_conversation_with_messages(
             tools_used=msg.tools_used,
             citations=msg.citations,
             selected_bots=msg.selected_bots,
+            selected_sources=msg.selected_sources,
             llm_provider=msg.llm_provider,
             llm_model=msg.llm_model,
             created_at=msg.created_at

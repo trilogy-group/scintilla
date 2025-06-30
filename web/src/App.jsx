@@ -3,7 +3,7 @@ import { Search, Send, Settings, User, BookOpen, Github, Code, Database, Message
 import { useScintilla } from './hooks/useScintilla'
 import { useAuth } from './hooks/useAuth'
 import { useBotAutoComplete, BotSuggestionsDropdown, SelectedBotsChips, MessageBotsUsed } from './hooks/useBotAutoComplete.jsx'
-import { useSourceSelector, SourceSelectorDropdown, SelectedSourcesChips } from './hooks/useSourceSelector.jsx'
+import { useSourceSelector, SourceSelectorDropdown, SelectedSourcesChips, MessageSourcesUsed } from './hooks/useSourceSelector.jsx'
 import CitationRenderer from './components/CitationRenderer'
 import { SourcesManager } from './components/SourcesManager'
 import { BotsManager } from './components/BotsManager'
@@ -250,7 +250,8 @@ function App() {
       use_user_sources: true,
       bot_ids: botIds,
       selected_sources: getSelectedSourceIds(),
-      selectedBots: selectedBots  // Pass bot information for display
+      selectedBots: selectedBots,  // Pass bot information for display
+      selectedSources: selectedSources  // Pass source information for display
     })
     
     // Force reload sources after query to ensure they remain available
@@ -407,7 +408,8 @@ function App() {
         use_user_sources: true,
         bot_ids: options.bot_ids || [],
         selected_sources: options.selected_sources || [],  // Pass source selections
-        selectedBots: options.selectedBots || []  // Pass bot information for display
+        selectedBots: options.selectedBots || [],  // Pass bot information for display
+        selectedSources: selectedSources  // Pass current source selections for display
       })
     }
   }
@@ -827,8 +829,13 @@ function App() {
                         {message.role === 'user' ? (
                         /* User Message - Boxed and full width */
                         <div className="w-full">
-                          {/* Show bots used for this message */}
-                          <MessageBotsUsed bots={message.selectedBots} />
+                          {/* Show bots and sources used for this message - inline like input field */}
+                          {((message.selectedBots && message.selectedBots.length > 0) || (message.selectedSources && message.selectedSources.length > 0)) && (
+                            <div className="flex flex-wrap gap-1 mb-2">
+                              <MessageBotsUsed bots={message.selectedBots} />
+                              <MessageSourcesUsed sources={message.selectedSources} />
+                            </div>
+                          )}
                           
                           <div className="bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 px-6 py-4 rounded-2xl shadow-sm">
                             <p className="whitespace-pre-wrap leading-relaxed text-gray-900 dark:text-white">{message.content}</p>

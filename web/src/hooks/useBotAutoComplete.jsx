@@ -326,8 +326,7 @@ export const MessageBotsUsed = ({ bots, className = "" }) => {
   if (!bots || bots.length === 0) return null
 
   return (
-    <div className={`flex flex-wrap gap-1 mb-2 ${className}`}>
-      <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Using:</span>
+    <>
       {bots.map((bot) => (
         <div
           key={bot.bot_id}
@@ -341,6 +340,6 @@ export const MessageBotsUsed = ({ bots, className = "" }) => {
           <span className="font-medium">@{bot.name}</span>
         </div>
       ))}
-    </div>
+    </>
   )
 } 

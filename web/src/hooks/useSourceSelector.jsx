@@ -322,4 +322,42 @@ export const SourceSelectorDropdown = ({
       </div>
     </div>
   )
+}
+
+// Component to display sources used in a message
+export const MessageSourcesUsed = ({ sources, className = "" }) => {
+  if (!sources || sources.length === 0) return null
+
+  return (
+    <>
+      {sources.map((source) => (
+        <div
+          key={source.source_id}
+          className="inline-flex items-center space-x-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full text-xs border border-blue-200 dark:border-blue-800"
+        >
+          <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
+            <svg className="h-1.5 w-1.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+          </div>
+          <span className="font-medium">{source.name}</span>
+          
+          {/* Source Type Indicator */}
+          {source.is_public ? (
+            <svg className="h-2 w-2 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Public">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          ) : source.is_shared_with_user ? (
+            <svg className="h-2 w-2 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Shared">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+            </svg>
+          ) : (
+            <svg className="h-2 w-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Private">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          )}
+        </div>
+      ))}
+    </>
+  )
 } 

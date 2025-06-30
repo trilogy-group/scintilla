@@ -50,7 +50,8 @@ export const useScintilla = () => {
         timestamp: new Date(msg.created_at),
         toolCalls: msg.tools_used || [],
         sources: msg.citations || [],
-        selectedBots: msg.selected_bots || []  // Preserve bot information if stored
+        selectedBots: msg.selected_bots || [],  // Preserve bot information if stored
+        selectedSources: msg.selected_sources || []  // Preserve source information if stored
       }))
       
       setMessages(formattedMessages)
@@ -78,7 +79,8 @@ export const useScintilla = () => {
       role: 'user',
       content: message,
       timestamp: new Date(),
-      selectedBots: options.selectedBots || []  // Store bot information with the message
+      selectedBots: options.selectedBots || [],  // Store bot information with the message
+      selectedSources: options.selectedSources || []  // Store source information with the message
     }
 
     setMessages(prev => [...prev, userMessage])

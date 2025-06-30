@@ -253,6 +253,7 @@ class MessageResponse(BaseModel):
     tools_used: Optional[List[str]]
     citations: Optional[List[Dict[str, Any]]]
     selected_bots: Optional[List[Dict[str, Any]]] = None
+    selected_sources: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
 
 

@@ -183,6 +183,9 @@ class Message(Base):
     # Bot selection tracking - stores which bots were selected for this message
     selected_bots = Column(JSONB, nullable=True, default=list)
     
+    # Source selection tracking - stores which sources were selected for this message
+    selected_sources = Column(JSONB, nullable=True, default=list)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships
