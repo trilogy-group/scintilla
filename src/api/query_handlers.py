@@ -15,7 +15,7 @@ from sqlalchemy import select
 import structlog
 
 from src.api.models import QueryRequest
-from src.db.models import Source
+from src.db.models import Source, SourceShare, BotSourceAssociation
 from src.agents.fast_agent import FastMCPAgent
 from src.config import TEST_MODE
 
@@ -215,37 +215,52 @@ class ProductionModeHandler:
             conversation_context = []
         
         # Get bot source IDs from frontend-parsed bot mentions
-        active_bot_ids = request.bot_ids or request.selected_bots or []
+        # Handle both UUID list (selected_bots) and object list (selectedBots)
+        active_bot_ids = []
+        if request.bot_ids:
+            active_bot_ids.extend(request.bot_ids)
+        elif request.selected_bots:
+            active_bot_ids.extend(request.selected_bots)
+        elif request.selectedBots:
+            # Extract bot_id from bot objects
+            for bot_obj in request.selectedBots:
+                if isinstance(bot_obj, dict) and 'bot_id' in bot_obj:
+                    active_bot_ids.append(bot_obj['bot_id'])
         
         bot_source_ids = []
         if active_bot_ids:
-            bot_sources_query = select(Source.source_id).where(
-                Source.owner_bot_id.in_(active_bot_ids),
-                Source.is_active.is_(True)
+            # Query for sources associated with bots through BotSourceAssociation table
+            bot_sources_query = (
+                select(BotSourceAssociation.source_id)
+                .join(Source, BotSourceAssociation.source_id == Source.source_id)
+                .where(
+                    BotSourceAssociation.bot_id.in_(active_bot_ids),
+                    Source.is_active.is_(True)
+                )
             )
             result = await self.db.execute(bot_sources_query)
             bot_source_ids = [row[0] for row in result.fetchall()]
         
         # Handle selected_sources parameter - filter which sources to use
         selected_source_ids = request.selected_sources or []
-        if selected_source_ids:
+        if selected_source_ids or bot_source_ids:
             logger.info(
-                "Using selected sources filter",
+                "Using explicit source selection",
                 selected_sources_count=len(selected_source_ids),
+                bot_sources_count=len(bot_source_ids),
                 selected_source_ids=selected_source_ids,
+                bot_source_ids=bot_source_ids,
                 user_id=self.user_id
             )
-            # Only use the explicitly selected sources (no user sources, only selected ones)
-            # But still include bot sources if bots are selected
+            # Only use the explicitly selected sources + bot sources (no fallback to all user sources)
             combined_source_ids = list(set(selected_source_ids + bot_source_ids))
         else:
-            # Fallback to old behavior if no sources selected - use all user sources + bot sources
+            # No sources selected and no bots selected - load no sources
             logger.info(
-                "No selected sources - using all user sources + bot sources",
-                bot_sources_count=len(bot_source_ids),
+                "No sources or bots selected - no tools will be loaded",
                 user_id=self.user_id
             )
-            combined_source_ids = bot_source_ids  # Only bot sources, no user sources unless explicitly selected
+            combined_source_ids = []
         
         # Create and load fast agent from database cache
         try:
