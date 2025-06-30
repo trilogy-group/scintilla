@@ -18,7 +18,7 @@
 
 ## 🔐 **Local Agent for VPN Access** (1.5 minutes)
 
-**[Screen: Navigate to Sources page with VPN sources visible]**
+**[Screen: Navigate to Sources page with VPN sources visible]** 
 
 > "As with Dashworks, we have sources that connect to our various data systems. The key difference is that we needed to access systems behind our VPN, particularly our Khoros Atlassian instance where most of our support data lives."
 
