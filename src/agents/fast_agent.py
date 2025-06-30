@@ -90,6 +90,22 @@ class FastMCPAgent:
         # Get source instructions from the tool manager
         self.source_instructions = await self.tool_manager.get_source_instructions(db)
         
+        # Debug log source instructions for preprocessing
+        if self.source_instructions:
+            logger.info("📋 Source instructions loaded for preprocessing", 
+                       instruction_count=len(self.source_instructions))
+            for source_name, instructions in self.source_instructions.items():
+                if instructions:
+                    has_project = 'project' in instructions.lower()
+                    has_space = 'space' in instructions.lower()
+                    logger.debug("📄 Source instruction details", 
+                               source=source_name, 
+                               has_project_filter=has_project,
+                               has_space_filter=has_space,
+                               instruction_length=len(instructions))
+        else:
+            logger.info("❌ No source instructions found")
+        
         # Classify tools for routing
         self._classify_tools()
         
@@ -122,6 +138,22 @@ class FastMCPAgent:
         
         # Get source instructions from the tool manager
         self.source_instructions = await self.tool_manager.get_source_instructions(db)
+        
+        # Debug log source instructions for preprocessing
+        if self.source_instructions:
+            logger.info("📋 Source instructions loaded for preprocessing", 
+                       instruction_count=len(self.source_instructions))
+            for source_name, instructions in self.source_instructions.items():
+                if instructions:
+                    has_project = 'project' in instructions.lower()
+                    has_space = 'space' in instructions.lower()
+                    logger.debug("📄 Source instruction details", 
+                               source=source_name, 
+                               has_project_filter=has_project,
+                               has_space_filter=has_space,
+                               instruction_length=len(instructions))
+        else:
+            logger.info("❌ No source instructions found")
         
         # Classify tools for routing
         self._classify_tools()
@@ -439,14 +471,21 @@ Be intelligent about tool usage - search when information is needed, respond dir
         try:
             # PREPROCESS QUERY: Incorporate bot instructions into the query itself
             original_message = message
+            logger.info("🚀 Starting query processing", original_message=original_message)
+            
             message = await self._preprocess_query_with_instructions(message)
             
             if message != original_message:
+                logger.info("🔄 Query was modified by preprocessing", 
+                           original=original_message, 
+                           modified=message)
                 yield {
                     "type": "query_preprocessed",
                     "original_query": original_message,
                     "modified_query": message
                 }
+            else:
+                logger.info("➡️ Query unchanged by preprocessing", query=message)
             
             # Initialize components
             llm = self._create_llm(llm_provider, llm_model)
@@ -516,6 +555,9 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 if hasattr(response, 'tool_calls') and response.tool_calls:
                     # Stream tool call notifications
                     for tool_call in response.tool_calls:
+                        logger.info("🔧 Tool call initiated", 
+                                   tool_name=tool_call['name'], 
+                                   arguments=tool_call['args'])
                         yield {
                             "type": "tool_call",
                             "tool_name": tool_call['name'],
@@ -943,7 +985,10 @@ Please return the corrected response with proper citations. Keep the same tone a
         Preprocess user query to incorporate bot instructions automatically
         Uses a lightweight LLM to intelligently modify the query based on source instructions
         """
+        logger.info("🔄 Starting query preprocessing", original_query=user_query)
+        
         if not self.source_instructions:
+            logger.info("❌ No source instructions found, skipping preprocessing")
             return user_query
         
         # Build instruction context for preprocessing
@@ -951,9 +996,13 @@ Please return the corrected response with proper citations. Keep the same tone a
         for source_name, instructions in self.source_instructions.items():
             if instructions and ('project' in instructions.lower() or 'space' in instructions.lower()):
                 instruction_context.append(f"**{source_name}**: {instructions}")
+                logger.info("📋 Found relevant instructions", source=source_name, has_project_filter='project' in instructions.lower(), has_space_filter='space' in instructions.lower())
         
         if not instruction_context:
+            logger.info("❌ No relevant filtering instructions found (no 'project' or 'space' keywords)")
             return user_query
+        
+        logger.info("✅ Building preprocessing prompt", instruction_sources=len(instruction_context))
         
         # Create preprocessing prompt
         preprocessing_prompt = f"""You are a query preprocessor. Your job is to modify user queries to automatically include required filters based on source instructions.
@@ -973,29 +1022,46 @@ USER QUERY: "{user_query}"
 
 MODIFIED QUERY (make it natural and specific):"""
 
+        logger.debug("📝 Preprocessing prompt created", prompt_length=len(preprocessing_prompt))
+
         try:
             # Use a lightweight LLM for preprocessing (faster/cheaper)
+            logger.info("🤖 Calling preprocessing LLM (claude-3-5-haiku)")
             preprocessing_llm = self._create_llm("anthropic", "claude-3-5-haiku-20241022")
             
             response = await preprocessing_llm.ainvoke([HumanMessage(content=preprocessing_prompt)])
             modified_query = response.content.strip()
             
+            logger.info("📤 LLM response received", 
+                       modified_query=modified_query, 
+                       original_length=len(user_query), 
+                       modified_length=len(modified_query))
+            
             # Validation checks
             if len(modified_query) > len(user_query) * 3:  # Prevent runaway responses
-                logger.warning("Query preprocessing resulted in overly long query, using original")
+                logger.warning("❌ Query preprocessing resulted in overly long query, using original", 
+                              ratio=len(modified_query) / len(user_query))
                 return user_query
             
             if len(modified_query) < 3:  # Prevent empty responses
-                logger.warning("Query preprocessing resulted in too short query, using original") 
+                logger.warning("❌ Query preprocessing resulted in too short query, using original")
                 return user_query
             
             # Only use modified query if it's meaningfully different
             if modified_query.lower().strip() != user_query.lower().strip():
-                logger.info(f"🔄 Query preprocessed: '{user_query}' → '{modified_query}'")
+                logger.info("✅ Query successfully preprocessed", 
+                           original_query=user_query, 
+                           modified_query=modified_query,
+                           change_detected=True)
                 return modified_query
             else:
+                logger.info("🔄 Query unchanged after preprocessing", 
+                           reason="Modified query identical to original")
                 return user_query
                 
         except Exception as e:
-            logger.warning(f"Query preprocessing failed: {e}, using original query")
+            logger.error("💥 Query preprocessing failed", 
+                        error=str(e), 
+                        error_type=type(e).__name__,
+                        original_query=user_query)
             return user_query
