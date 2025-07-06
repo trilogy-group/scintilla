@@ -37,7 +37,7 @@ SCINTILLA_LOCAL_SCHEMES = [
 ]
 
 # Configuration constants
-MAX_TOOL_ITERATIONS = 15  # Increased since LLM is now much faster
+MAX_TOOL_ITERATIONS = 20  # Increased to support comprehensive multi-source searching
 CONVERSATION_HISTORY_LIMIT = 10
 TOOL_PREVIEW_LENGTH = 500
 DEFAULT_TEMPERATURE = 0.1
@@ -390,11 +390,31 @@ RESPOND DIRECTLY for:
 AVAILABLE SEARCH TOOLS ({len(search_tools)} tools):
 {tools_context}{query_guidance_section}
 
-SEARCH STRATEGY:
-- If a search returns empty results, try 1-2 alternative approaches with different parameters
-- If multiple searches return empty results, conclude that the information isn't available
-- Don't repeatedly search with the same tool - try different tools or stop searching
-- When searches return "issues": [] or empty lists, explain this to the user rather than retrying
+MULTI-SOURCE SEARCH STRATEGY:
+🎯 COMPREHENSIVE COVERAGE REQUIREMENT:
+- For status/integration queries: Search tickets AND communications AND documentation
+- For technical issues: Search bug reports AND discussions AND knowledge bases  
+- For project updates: Search project tools AND email discussions AND documentation
+- Continue searching until you have comprehensive coverage across relevant source types
+
+📋 SOURCE TYPE PLANNING:
+Before searching, consider which source types are relevant:
+- **Technical Status**: Jira/tickets + email discussions + documentation
+- **Integration Issues**: Bug reports + support communications + technical docs
+- **Project Updates**: Project management tools + team communications + release docs
+- **Implementation Details**: Code repositories + technical documentation + design discussions
+
+🔄 ITERATION GUIDELINES:
+- Don't stop after finding results from ONE source type
+- Search 2-3 complementary sources for comprehensive answers
+- Use different tools that cover different information types
+- If first search finds tickets, also search communications about those tickets
+- If you find technical issues, also look for related discussions or documentation
+
+⚠️ STOPPING CRITERIA:
+- Stop only after checking relevant source types OR after 4-5 meaningful searches
+- Don't repeat the same search tool with identical parameters
+- If sources consistently return empty, then conclude information isn't available
 
 CITATION REQUIREMENTS (only when using tools):
 - Cite sources using markdown links [Title](URL) format when referencing information from that source
@@ -410,6 +430,73 @@ CAPABILITY RESPONSE (when asked what you can do):
 
 Be intelligent about tool usage - search when information is needed, respond directly when appropriate.{instructions_section}"""
     
+    def _analyze_query_for_source_types(self, query: str, available_tools: List[BaseTool]) -> Dict[str, List[str]]:
+        """
+        Analyze the query to suggest which source types should be searched for comprehensive coverage
+        Returns mapping of source types to relevant tool names
+        """
+        query_lower = query.lower()
+        
+        # Classify available tools by source type
+        tool_types = {
+            "tickets": [],      # Jira, GitHub issues, etc.
+            "communications": [], # Gmail, Slack, Teams, etc.  
+            "documentation": [], # Confluence, wikis, etc.
+            "code": [],         # GitHub, GitLab repositories
+            "files": []         # File systems, document stores
+        }
+        
+        # Categorize available tools
+        for tool in available_tools:
+            tool_name_lower = tool.name.lower()
+            
+            if any(keyword in tool_name_lower for keyword in ['jira', 'github', 'ticket', 'issue', 'bug']):
+                tool_types["tickets"].append(tool.name)
+            elif any(keyword in tool_name_lower for keyword in ['gmail', 'email', 'slack', 'teams', 'chat']):
+                tool_types["communications"].append(tool.name)
+            elif any(keyword in tool_name_lower for keyword in ['confluence', 'wiki', 'documentation', 'docs']):
+                tool_types["documentation"].append(tool.name)
+            elif any(keyword in tool_name_lower for keyword in ['github', 'gitlab', 'git', 'repository', 'code']):
+                tool_types["code"].append(tool.name)
+            elif any(keyword in tool_name_lower for keyword in ['file', 'document', 'storage']):
+                tool_types["files"].append(tool.name)
+        
+        # Analyze query patterns to suggest relevant source types
+        suggested_types = []
+        
+        # Status/integration queries benefit from multiple sources
+        if any(keyword in query_lower for keyword in ['status', 'integration', 'progress', 'update', 'current']):
+            suggested_types.extend(["tickets", "communications", "documentation"])
+        
+        # Technical issue queries
+        elif any(keyword in query_lower for keyword in ['error', 'bug', 'issue', 'problem', 'failure', 'not working']):
+            suggested_types.extend(["tickets", "communications", "documentation"])
+        
+        # Implementation/how-to queries
+        elif any(keyword in query_lower for keyword in ['how', 'implement', 'setup', 'configure', 'install']):
+            suggested_types.extend(["documentation", "code", "communications"])
+        
+        # Project/planning queries
+        elif any(keyword in query_lower for keyword in ['project', 'plan', 'roadmap', 'timeline', 'milestone']):
+            suggested_types.extend(["tickets", "communications", "documentation"])
+        
+        # Default: suggest tickets and documentation as baseline
+        if not suggested_types:
+            suggested_types = ["tickets", "documentation"]
+        
+        # Filter to only include types that have available tools
+        relevant_sources = {}
+        for source_type in suggested_types:
+            if tool_types[source_type]:  # Only include if we have tools for this type
+                relevant_sources[source_type] = tool_types[source_type]
+        
+        logger.info("Query analysis for multi-source search", 
+                   query_keywords=[word for word in query_lower.split() if len(word) > 3],
+                   suggested_source_types=list(relevant_sources.keys()),
+                   available_tools_by_type={k: len(v) for k, v in tool_types.items() if v})
+        
+        return relevant_sources
+
     def _extract_query_language_guidance(self, field_name: str, description: str, guidance_list: List[str]) -> None:
         """Extract specific query language guidance from parameter descriptions"""
         desc_lower = description.lower()
@@ -721,12 +808,26 @@ Be intelligent about tool usage - search when information is needed, respond dir
             # Initialize context manager for this query
             self.context_manager = ContextManager(llm_model)
             
+            # Analyze query to suggest relevant source types
+            suggested_sources = self._analyze_query_for_source_types(message, search_tools)
+            
             # Create system prompt
             system_prompt = self._create_system_prompt(search_tools)
             
+            # Build comprehensive search guidance
+            search_guidance = f"Searching {len(search_tools)} tools from {len(self.loaded_sources)} sources"
+            
+            if suggested_sources:
+                source_types = list(suggested_sources.keys())
+                search_guidance += f"\n🎯 Comprehensive coverage needed: {', '.join(source_types)}"
+                
+                # Add specific tool suggestions
+                for source_type, tools in suggested_sources.items():
+                    search_guidance += f"\n  • {source_type.title()}: {tools[0]}" + (f" (and {len(tools)-1} more)" if len(tools) > 1 else "")
+            
             yield {
-                "type": "thinking",
-                "content": f"Searching {len(search_tools)} tools from {len(self.loaded_sources)} sources..."
+                "type": "thinking", 
+                "content": search_guidance
             }
             
             # Setup conversation with context management
@@ -744,6 +845,10 @@ Be intelligent about tool usage - search when information is needed, respond dir
             all_tool_metadata = []  # Collect all metadata across iterations
             iteration = 0
             tool_results_str = []  # Collect tool results for context management
+            
+            # Track source type coverage for multi-source search encouragement
+            source_types_searched = set()
+            suggested_source_types = set(suggested_sources.keys()) if suggested_sources else set()
             
             # Create a faster model for tool calling if enabled and using slow model
             fast_llm_with_tools = None
@@ -858,6 +963,20 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     # Store metadata for final citation processing
                     all_tool_metadata.extend(tool_metadata)
                     
+                    # Track source types that have been searched
+                    for tool_call in tool_calls_to_execute:
+                        tool_name = tool_call['name'].lower()
+                        if any(keyword in tool_name for keyword in ['jira', 'github', 'ticket', 'issue', 'bug']):
+                            source_types_searched.add("tickets")
+                        elif any(keyword in tool_name for keyword in ['gmail', 'email', 'slack', 'teams', 'chat']):
+                            source_types_searched.add("communications")
+                        elif any(keyword in tool_name for keyword in ['confluence', 'wiki', 'documentation', 'docs']):
+                            source_types_searched.add("documentation")
+                        elif any(keyword in tool_name for keyword in ['github', 'gitlab', 'git', 'repository', 'code']):
+                            source_types_searched.add("code")
+                        elif any(keyword in tool_name for keyword in ['file', 'document', 'storage']):
+                            source_types_searched.add("files")
+                    
                     # Collect tool result strings for context management
                     for result in call_results:
                         tool_result_str = result.get("result", "")
@@ -896,15 +1015,44 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     
                     continue
                 else:
-                    # No more tool calls - prepare for final response
-                    # Record final iteration timing (no tools called)
-                    iteration_end = time.time()
-                    timings["iterations"].append({
-                        "iteration": iteration,
-                        "duration": iteration_end - iteration_start,
-                        "tool_calls": 0
-                    })
-                    break
+                    # No more tool calls - check if we have comprehensive coverage
+                    unsearched_types = suggested_source_types - source_types_searched
+                    
+                    # If we have important unsearched source types and haven't reached iteration limit, encourage more searching
+                    if unsearched_types and iteration < 8:  # Allow up to 8 iterations for comprehensive coverage
+                        logger.info(f"🔍 Multi-source coverage check: {len(source_types_searched)} searched, {len(unsearched_types)} remaining",
+                                   searched=list(source_types_searched),
+                                   remaining=list(unsearched_types))
+                        
+                        # Add a guidance message to conversation to encourage more searching
+                        coverage_guidance = f"""I've searched {list(source_types_searched)} but should also check {list(unsearched_types)} for comprehensive coverage. Let me search additional source types to provide a complete answer."""
+                        
+                        conversation_history.append(AIMessage(content=coverage_guidance))
+                        
+                        # Record iteration timing and continue
+                        iteration_end = time.time()
+                        timings["iterations"].append({
+                            "iteration": iteration,
+                            "duration": iteration_end - iteration_start,
+                            "tool_calls": 0,
+                            "coverage_guidance": True
+                        })
+                        continue
+                    else:
+                        # Sufficient coverage or reached iteration limit - prepare for final response
+                        logger.info(f"✅ Multi-source search complete",
+                                   searched_types=list(source_types_searched),
+                                   suggested_types=list(suggested_source_types),
+                                   coverage_complete=len(unsearched_types) == 0)
+                        
+                        # Record final iteration timing (no tools called)
+                        iteration_end = time.time()
+                        timings["iterations"].append({
+                            "iteration": iteration,
+                            "duration": iteration_end - iteration_start,
+                            "tool_calls": 0
+                        })
+                        break
             
             # FINAL RESPONSE GENERATION WITH CITATIONS
             # Now we have all tool results and metadata - generate final response with proper citations
@@ -1060,7 +1208,13 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
                     "context_optimized": len(conversation_history) != len(optimized_history),
                     "conversation_messages_kept": len(optimized_history) if optimized_history else 0,
                     "conversation_messages_total": len(conversation_history) if conversation_history else 0,
-                    "performance_breakdown": performance_summary
+                    "performance_breakdown": performance_summary,
+                    "multi_source_coverage": {
+                        "suggested_source_types": list(suggested_source_types) if suggested_source_types else [],
+                        "searched_source_types": list(source_types_searched),
+                        "coverage_complete": len(suggested_source_types - source_types_searched) == 0 if suggested_source_types else True,
+                        "coverage_percentage": int((len(source_types_searched) / len(suggested_source_types)) * 100) if suggested_source_types else 100
+                    }
                 }
             }
             
@@ -1084,7 +1238,13 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
             yield {
                 "type": "error", 
                 "error": f"Query failed: {str(e)}",
-                "details": str(e)
+                "details": str(e),
+                "multi_source_coverage": {
+                    "suggested_source_types": list(suggested_source_types) if 'suggested_source_types' in locals() and suggested_source_types else [],
+                    "searched_source_types": list(source_types_searched) if 'source_types_searched' in locals() else [],
+                    "coverage_complete": False,
+                    "coverage_percentage": 0
+                }
             }
     
     def _build_citation_guidance(self, tool_metadata: List[Dict]) -> str:
