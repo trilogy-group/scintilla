@@ -337,6 +337,56 @@ class FastMCPAgent:
         
         return validated
     
+    def _validate_message_sequence_for_claude(self, messages: List[Any]) -> List[Any]:
+        """
+        Final validation to ensure no orphaned tool results that would cause Claude API errors
+        This is a safety net to catch any tool call/result mismatches before sending to Claude
+        """
+        validated_messages = []
+        available_tool_call_ids = set()
+        
+        for i, msg in enumerate(messages):
+            # SystemMessage and HumanMessage - always include
+            if (hasattr(msg, '__class__') and 
+                ('SystemMessage' in str(msg.__class__) or 'HumanMessage' in str(msg.__class__))):
+                validated_messages.append(msg)
+                # Reset available tool call IDs after user message (new conversation turn)
+                if 'HumanMessage' in str(msg.__class__):
+                    available_tool_call_ids.clear()
+            
+            # AIMessage - check for tool calls
+            elif hasattr(msg, '__class__') and 'AIMessage' in str(msg.__class__):
+                validated_messages.append(msg)
+                
+                # Collect tool call IDs from this AI message
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        if isinstance(tool_call, dict) and 'id' in tool_call:
+                            available_tool_call_ids.add(tool_call['id'])
+                        elif hasattr(tool_call, 'id'):
+                            available_tool_call_ids.add(tool_call.id)
+            
+            # ToolMessage - only include if we have matching tool call ID
+            elif hasattr(msg, '__class__') and 'ToolMessage' in str(msg.__class__):
+                if hasattr(msg, 'tool_call_id') and msg.tool_call_id in available_tool_call_ids:
+                    validated_messages.append(msg)
+                    # Remove the tool call ID since it's now used
+                    available_tool_call_ids.remove(msg.tool_call_id)
+                else:
+                    logger.warning(f"Removing orphaned tool result with ID: {getattr(msg, 'tool_call_id', 'unknown')}")
+                    logger.warning(f"Available tool call IDs: {available_tool_call_ids}")
+            
+            else:
+                # Unknown message type - include it
+                validated_messages.append(msg)
+        
+        # Log if we removed anything
+        removed_count = len(messages) - len(validated_messages)
+        if removed_count > 0:
+            logger.warning(f"Removed {removed_count} orphaned tool result messages to prevent Claude API errors")
+        
+        return validated_messages
+    
     def _create_llm(self, llm_provider: str, llm_model: str):
         """Create LLM instance"""
         import os
@@ -968,8 +1018,8 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 messages.extend(filtered_history)
                 messages.append(HumanMessage(content=message))
                 
-                # DO NOT add standalone tool results - this causes tool_use_id mismatches
-                # The conversation_history already contains proper tool use/result pairs
+                # CRITICAL: Validate message sequence to prevent tool_use_id mismatches
+                messages = self._validate_message_sequence_for_claude(messages)
                 
                 # Log context usage
                 estimated_tokens = self.context_manager.estimate_current_context(
@@ -1178,9 +1228,6 @@ Be intelligent about tool usage - search when information is needed, respond dir
             final_messages.extend(filtered_history)
             final_messages.append(HumanMessage(content=message))
             
-            # DO NOT add standalone tool results - this causes tool_use_id mismatches
-            # The optimized_history already contains proper tool use/result pairs
-            
             # Add citation guidance for markdown links
             if citation_guidance:
                 citation_prompt = f"""Available sources for citations:
@@ -1190,6 +1237,9 @@ Be intelligent about tool usage - search when information is needed, respond dir
 IMPORTANT: Use markdown links exactly as shown above when citing these sources. Format: [Title](URL)"""
                 
                 final_messages.append(HumanMessage(content=citation_prompt))
+            
+            # CRITICAL: Validate final message sequence to prevent tool_use_id mismatches
+            final_messages = self._validate_message_sequence_for_claude(final_messages)
             
             # Get final response with proper citations (with timeout handling)
             final_llm_start = time.time()
