@@ -1532,6 +1532,64 @@ CRITICAL: Return ONLY the corrected response content. Do NOT add sections like "
             logger.warning(f"Response validation failed: {e}, keeping original")
             return final_content
 
+    def _generate_context_examples(self, instruction_context: List[str]) -> Dict[str, str]:
+        """
+        Generate dynamic examples based on actual business context to avoid hardcoded references
+        """
+        import re  # Move import to top
+        
+        # Extract project and space names from the actual context
+        project_names = []
+        space_names = []
+        
+        for instruction in instruction_context:
+            instruction_lower = instruction.lower()
+            
+            # Look for project patterns
+            if 'project' in instruction_lower:
+                # Pattern: "use only [PROJECT] project" or "project [PROJECT]"
+                project_matches = re.findall(r'(?:use only|project)\s+([A-Z][A-Z0-9]+)(?:\s+project)?', instruction, re.IGNORECASE)
+                project_names.extend(project_matches)
+            
+            # Look for space patterns - improved logic
+            if 'space' in instruction_lower:
+                # Pattern: "[SPACE_NAME] space" or "in [SPACE_NAME] space"
+                space_matches = re.findall(r'(?:in\s+)?([A-Za-z][A-Za-z\s]+?)\s+space', instruction, re.IGNORECASE)
+                # Clean up extracted space names (remove common prefixes)
+                clean_spaces = []
+                for space in space_matches:
+                    space = space.strip()
+                    # Remove common prefixes that indicate direction rather than name
+                    space = re.sub(r'^(search in|in)\s+', '', space, flags=re.IGNORECASE)
+                    if len(space) > 2:
+                        clean_spaces.append(space)
+                space_names.extend(clean_spaces)
+        
+        # Use actual names if found, otherwise use placeholders
+        project_example = project_names[0] if project_names else "[PROJECT_NAME]"
+        space_example = space_names[0] if space_names else "[SPACE_NAME]"
+        
+        # Ensure space example doesn't cause issues in bad examples
+        space_key = space_example[:3].upper() if space_example != "[SPACE_NAME]" else "SPC"
+        
+        # Generate contextual examples
+        good_examples = [
+            f'- "how many tickets are open?" → "how many tickets are open in the {project_example} project?"',
+            f'- "show me recent issues" → "show me recent issues from the {project_example} project"',
+            f'- "find documentation" → "find documentation in the {space_example} space"'
+        ]
+        
+        bad_examples = [
+            f'- "how many tickets?" → "project = {project_example} AND status = Open" (technical syntax)',
+            f'- "recent issues" → "project = {project_example} AND created > -30d" (query language)', 
+            f'- "find docs" → "space.key = \'{space_key}\' AND type = page" (technical format)'
+        ]
+        
+        return {
+            'good': '\n'.join(good_examples),
+            'bad': '\n'.join(bad_examples)
+        }
+
     async def _preprocess_query_with_instructions(self, user_query: str) -> str:
         """
         Preprocess user query to incorporate bot instructions automatically
@@ -1556,6 +1614,9 @@ CRITICAL: Return ONLY the corrected response content. Do NOT add sections like "
         
         logger.info("✅ Building preprocessing prompt", instruction_sources=len(instruction_context))
         
+        # Extract key terms from business context for dynamic examples  
+        context_examples = self._generate_context_examples(instruction_context)
+        
         # Create preprocessing prompt - TOOL-AGNOSTIC and NATURAL LANGUAGE focused
         preprocessing_prompt = f"""You are a natural language query enhancer. Add business context to user queries while keeping them conversational and tool-agnostic.
 
@@ -1565,15 +1626,11 @@ BUSINESS CONTEXT:
 TASK: Enhance the user's query by adding relevant business context mentioned above. Keep it natural and conversational.
 
 EXAMPLES:
-✅ GOOD:
-- "how many tickets are open?" → "how many tickets are open in the XINETBSE project?"
-- "show me recent issues" → "show me recent issues from the XINETBSE project"
-- "find documentation" → "find documentation in the Engineering Knowledge Base space"
+✅ GOOD - Add context naturally:
+{context_examples['good']}
 
-❌ BAD - Don't do this:
-- "how many tickets?" → "project = XINETBSE AND status = Open" (technical syntax)
-- "recent issues" → "project = XINETBSE AND created > -30d" (query language)
-- "find docs" → "space.key = 'EKB' AND type = page" (technical format)
+❌ BAD - Don't use technical syntax:
+{context_examples['bad']}
 
 RULES:
 - Maximum 2x the length of the original query
