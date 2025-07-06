@@ -260,14 +260,82 @@ class FastMCPAgent:
                 if role == "user":
                     langchain_messages.append(HumanMessage(content=content))
                 elif role == "assistant":
+                    # Simple text-only AI message - don't try to reconstruct tool calls from stored messages
+                    # Tool call/result reconstruction from database is complex and error-prone
+                    # Instead, rely on the fresh conversation history built during this session
                     langchain_messages.append(AIMessage(content=content))
             
-            logger.info(f"Loaded {len(langchain_messages)} conversation messages for context")
-            return langchain_messages
+            # Validate the conversation history to ensure no orphaned tool results
+            validated_messages = self._validate_conversation_history(langchain_messages)
+            
+            logger.info(f"Loaded {len(validated_messages)} conversation messages for context (validated from {len(langchain_messages)})")
+            return validated_messages
             
         except Exception as e:
             logger.warning("Failed to load conversation history", error=str(e))
             return []
+    
+    def _validate_conversation_history(self, messages: List[Any]) -> List[Any]:
+        """
+        Validate conversation history to ensure no orphaned tool calls/results
+        Remove any ToolMessage objects that don't have corresponding AIMessage with tool calls
+        """
+        validated = []
+        
+        for i, msg in enumerate(messages):
+            # Always keep user messages and regular AI messages
+            if (hasattr(msg, '__class__') and 
+                ('HumanMessage' in str(msg.__class__) or 
+                 ('AIMessage' in str(msg.__class__) and not (hasattr(msg, 'tool_calls') and msg.tool_calls)))):
+                validated.append(msg)
+            
+            # For AI messages with tool calls, only keep if we have the complete set
+            elif (hasattr(msg, '__class__') and 'AIMessage' in str(msg.__class__) and 
+                  hasattr(msg, 'tool_calls') and msg.tool_calls):
+                
+                # Collect expected tool call IDs
+                expected_tool_ids = set()
+                for tool_call in msg.tool_calls:
+                    if isinstance(tool_call, dict) and 'id' in tool_call:
+                        expected_tool_ids.add(tool_call['id'])
+                    elif hasattr(tool_call, 'id'):
+                        expected_tool_ids.add(tool_call.id)
+                
+                # Check if we have all corresponding tool results
+                found_tool_ids = set()
+                j = i + 1
+                while j < len(messages) and expected_tool_ids - found_tool_ids:
+                    next_msg = messages[j]
+                    if (hasattr(next_msg, '__class__') and 'ToolMessage' in str(next_msg.__class__) and
+                        hasattr(next_msg, 'tool_call_id')):
+                        if next_msg.tool_call_id in expected_tool_ids:
+                            found_tool_ids.add(next_msg.tool_call_id)
+                        j += 1
+                    else:
+                        break
+                
+                # Only include if we have complete tool call/result pairs
+                if found_tool_ids == expected_tool_ids:
+                    validated.append(msg)
+                    # Also include the corresponding tool results
+                    j = i + 1
+                    while j < len(messages) and found_tool_ids:
+                        next_msg = messages[j]
+                        if (hasattr(next_msg, '__class__') and 'ToolMessage' in str(next_msg.__class__) and
+                            hasattr(next_msg, 'tool_call_id') and 
+                            next_msg.tool_call_id in expected_tool_ids):
+                            validated.append(next_msg)
+                            found_tool_ids.remove(next_msg.tool_call_id)
+                        j += 1
+                else:
+                    logger.warning(f"Removing incomplete tool call sequence: expected {len(expected_tool_ids)} results, found {len(found_tool_ids)}")
+            
+            # Skip orphaned ToolMessage objects (they should be handled above)
+            elif hasattr(msg, '__class__') and 'ToolMessage' in str(msg.__class__):
+                # These will be included when processing their corresponding AI message above
+                continue
+        
+        return validated
     
     def _create_llm(self, llm_provider: str, llm_model: str):
         """Create LLM instance"""

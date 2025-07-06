@@ -130,7 +130,7 @@ class ContextManager:
     ) -> List[Any]:
         """
         Truncate conversation history to fit within context limits
-        Keeps the most recent messages and tries to maintain conversation pairs
+        Keeps the most recent messages and preserves tool call/result pairs
         """
         
         if not conversation_history:
@@ -138,21 +138,32 @@ class ContextManager:
         
         available_tokens = self.model_limits.safe_limit - reserved_tokens
         
-        # Start from most recent and work backwards
+        # Group messages into tool call/result pairs and standalone messages
+        message_groups = self._group_tool_call_pairs(conversation_history)
+        
+        # Start from most recent groups and work backwards
         truncated_history = []
         current_tokens = 0
         
-        # Process messages in reverse order (most recent first)
-        for msg in reversed(conversation_history):
-            if hasattr(msg, 'content'):
-                role = "user" if "Human" in str(type(msg)) else "assistant"
-                msg_tokens = TokenEstimator.estimate_message_tokens(role, msg.content)
-                
-                if current_tokens + msg_tokens <= available_tokens:
-                    truncated_history.insert(0, msg)  # Insert at beginning
-                    current_tokens += msg_tokens
-                else:
-                    break
+        # Process groups in reverse order (most recent first)
+        for group in reversed(message_groups):
+            # Calculate tokens for the entire group
+            group_tokens = 0
+            for msg in group:
+                if hasattr(msg, 'content'):
+                    role = "user" if "Human" in str(type(msg)) else "assistant"
+                    msg_tokens = TokenEstimator.estimate_message_tokens(role, msg.content)
+                    group_tokens += msg_tokens
+            
+            # Only include the group if it fits entirely
+            if current_tokens + group_tokens <= available_tokens:
+                # Insert all messages from this group at the beginning
+                for msg in reversed(group):
+                    truncated_history.insert(0, msg)
+                current_tokens += group_tokens
+            else:
+                # Group doesn't fit, stop here
+                break
         
         removed_count = len(conversation_history) - len(truncated_history)
         if removed_count > 0:
@@ -162,6 +173,64 @@ class ContextManager:
             )
         
         return truncated_history
+    
+    def _group_tool_call_pairs(self, conversation_history: List[Any]) -> List[List[Any]]:
+        """
+        Group conversation messages to preserve tool call/result pairs
+        
+        Returns list of message groups where each group contains:
+        - Single standalone message, or
+        - AI message with tool calls + corresponding tool result messages
+        """
+        groups = []
+        i = 0
+        
+        while i < len(conversation_history):
+            msg = conversation_history[i]
+            
+            # Check if this is an AI message with tool calls
+            if (hasattr(msg, 'tool_calls') and msg.tool_calls and 
+                hasattr(msg, '__class__') and 'AIMessage' in str(msg.__class__)):
+                
+                # Start a new group with the AI message
+                group = [msg]
+                tool_call_ids = set()
+                
+                # Collect tool call IDs
+                for tool_call in msg.tool_calls:
+                    if isinstance(tool_call, dict) and 'id' in tool_call:
+                        tool_call_ids.add(tool_call['id'])
+                    elif hasattr(tool_call, 'id'):
+                        tool_call_ids.add(tool_call.id)
+                
+                # Look for corresponding tool result messages
+                j = i + 1
+                while j < len(conversation_history) and tool_call_ids:
+                    next_msg = conversation_history[j]
+                    
+                    # Check if this is a tool result message
+                    if (hasattr(next_msg, 'tool_call_id') and 
+                        hasattr(next_msg, '__class__') and 'ToolMessage' in str(next_msg.__class__)):
+                        
+                        if next_msg.tool_call_id in tool_call_ids:
+                            group.append(next_msg)
+                            tool_call_ids.remove(next_msg.tool_call_id)
+                            j += 1
+                        else:
+                            # Tool result doesn't match our tool calls, stop looking
+                            break
+                    else:
+                        # Not a tool result message, stop looking
+                        break
+                
+                groups.append(group)
+                i = j  # Continue from where we left off
+            else:
+                # Standalone message (user input, AI response without tools, etc.)
+                groups.append([msg])
+                i += 1
+        
+        return groups
     
     def truncate_tool_result(self, tool_result: str, max_tokens: int = 8000) -> str:
         """
