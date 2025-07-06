@@ -267,11 +267,12 @@ class ProductionModeHandler:
             fast_agent = FastMCPAgent()
             logger.info("FastMCPAgent created", user_id=self.user_id)
             
-            # Load tools with filtered source IDs
+            # Load tools with filtered source IDs and selected bot IDs for proper instruction handling
             total_tools_loaded = await fast_agent.load_tools_for_specific_sources(
                 db=self.db,
                 user_id=self.user_id,
-                source_ids=combined_source_ids  # Use filtered source list
+                source_ids=combined_source_ids,  # Use filtered source list
+                selected_bot_ids=active_bot_ids  # CRITICAL FIX: Pass selected bot IDs for instruction filtering
             )
             logger.info(
                 "Tools loaded with source filtering", 

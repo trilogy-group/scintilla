@@ -72,10 +72,11 @@ class FastMCPAgent:
         self, 
         db: AsyncSession, 
         user_id: uuid.UUID,
-        bot_source_ids: Optional[List[uuid.UUID]] = None
+        bot_source_ids: Optional[List[uuid.UUID]] = None,
+        selected_bot_ids: Optional[List[uuid.UUID]] = None
     ) -> int:
         """Load tools from database cache using FastMCP"""
-        logger.info("Loading FastMCP tools from cache", user_id=user_id, bot_source_ids=bot_source_ids)
+        logger.info("Loading FastMCP tools from cache", user_id=user_id, bot_source_ids=bot_source_ids, selected_bot_ids=selected_bot_ids)
         
         # Load tools via centralized tool manager
         tool_count = await self.tool_manager.load_tools_for_user(
@@ -88,8 +89,8 @@ class FastMCPAgent:
         self.tools = self.tool_manager.get_tools()
         self.loaded_sources = self.tool_manager.get_server_names()
         
-        # Get source instructions from the tool manager
-        self.source_instructions = await self.tool_manager.get_source_instructions(db)
+        # Get source instructions from the tool manager (FIXED: Pass selected bot IDs)
+        self.source_instructions = await self.tool_manager.get_source_instructions(db, selected_bot_ids)
         
         # Debug log source instructions for preprocessing
         if self.source_instructions:
@@ -121,10 +122,11 @@ class FastMCPAgent:
         self, 
         db: AsyncSession, 
         user_id: uuid.UUID,
-        source_ids: List[uuid.UUID]
+        source_ids: List[uuid.UUID],
+        selected_bot_ids: Optional[List[uuid.UUID]] = None
     ) -> int:
         """Load tools from database cache for specific source IDs only"""
-        logger.info("Loading FastMCP tools for specific sources", user_id=user_id, source_ids=source_ids)
+        logger.info("Loading FastMCP tools for specific sources", user_id=user_id, source_ids=source_ids, selected_bot_ids=selected_bot_ids)
         
         # Load tools via centralized tool manager
         tool_count = await self.tool_manager.load_tools_for_specific_sources(
@@ -137,8 +139,8 @@ class FastMCPAgent:
         self.tools = self.tool_manager.get_tools()
         self.loaded_sources = self.tool_manager.get_server_names()
         
-        # Get source instructions from the tool manager
-        self.source_instructions = await self.tool_manager.get_source_instructions(db)
+        # Get source instructions from the tool manager (FIXED: Pass selected bot IDs)
+        self.source_instructions = await self.tool_manager.get_source_instructions(db, selected_bot_ids)
         
         # Debug log source instructions for preprocessing
         if self.source_instructions:

@@ -980,8 +980,8 @@ class FastMCPToolManager:
         
         return search_tools
     
-    async def get_source_instructions(self, db: AsyncSession) -> Dict[str, str]:
-        """Get instructions for all loaded sources, including bot-specific instructions"""
+    async def get_source_instructions(self, db: AsyncSession, selected_bot_ids: Optional[List[uuid.UUID]] = None) -> Dict[str, str]:
+        """Get instructions for all loaded sources, including bot-specific instructions ONLY from selected bots"""
         instructions_map = {}
         
         if hasattr(self, 'sources'):
@@ -991,23 +991,26 @@ class FastMCPToolManager:
                 source_instructions = source.instructions
                 source_id = source.source_id
                 
-                # First check for bot-specific instructions in BotSourceAssociation
-                bot_instructions_query = select(BotSourceAssociation.custom_instructions).where(
-                    BotSourceAssociation.source_id == source_id,
-                    BotSourceAssociation.custom_instructions.isnot(None),
-                    BotSourceAssociation.custom_instructions != ""
-                )
+                # Only check for bot-specific instructions if bots are selected AND source is used by selected bots
+                bot_instructions = None
+                if selected_bot_ids:
+                    bot_instructions_query = select(BotSourceAssociation.custom_instructions).where(
+                        BotSourceAssociation.source_id == source_id,
+                        BotSourceAssociation.bot_id.in_(selected_bot_ids),  # CRITICAL: Only from selected bots
+                        BotSourceAssociation.custom_instructions.isnot(None),
+                        BotSourceAssociation.custom_instructions != ""
+                    )
+                    
+                    bot_instructions_result = await db.execute(bot_instructions_query)
+                    bot_instructions = bot_instructions_result.scalar()
                 
-                bot_instructions_result = await db.execute(bot_instructions_query)
-                bot_instructions = bot_instructions_result.scalar()
-                
-                # Use bot-specific instructions if available, otherwise fall back to source instructions
+                # Use bot-specific instructions ONLY if from selected bots, otherwise fall back to source instructions
                 if bot_instructions:
                     instructions_map[source_name] = bot_instructions
-                    logger.info(f"📋 Found BOT-SPECIFIC instructions for source: {source_name} -> {bot_instructions}")
+                    logger.info(f"📋 Using BOT-SPECIFIC instructions for source: {source_name} -> {bot_instructions}")
                 elif source_instructions:
                     instructions_map[source_name] = source_instructions
-                    logger.info(f"📋 Found general instructions for source: {source_name} -> {source_instructions}")
+                    logger.info(f"📋 Using general instructions for source: {source_name} -> {source_instructions}")
         
-        logger.info(f"📋 Loaded instructions for {len(instructions_map)} sources")
+        logger.info(f"📋 Loaded instructions for {len(instructions_map)} sources (with {len(selected_bot_ids or [])} selected bots)")
         return instructions_map 
