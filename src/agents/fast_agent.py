@@ -933,7 +933,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 if hasattr(response, 'tool_calls') and response.tool_calls:
                     # Standard LangChain tool calls
                     tool_calls_to_execute = response.tool_calls
-                elif response.content and '<invoke' in response.content:
+                elif response.content and isinstance(response.content, str) and '<invoke' in response.content:
                     # Fallback: Parse text-based tool invocation syntax
                     logger.warning("⚠️ LLM used text-based tool calling - parsing <invoke> syntax")
                     tool_calls_to_execute = self._parse_invoke_syntax(response.content)
@@ -1014,7 +1014,11 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     tools_called.extend(call_results)
                     
                     # Update conversation history for next iteration
-                    conversation_history.append(AIMessage(content=response.content or ""))
+                    # Ensure response content is a string
+                    content_str = ""
+                    if response.content:
+                        content_str = response.content if isinstance(response.content, str) else str(response.content)
+                    conversation_history.append(AIMessage(content=content_str))
                     conversation_history.extend(tool_results)
                     
                     # Record iteration timing
@@ -1076,7 +1080,9 @@ Be intelligent about tool usage - search when information is needed, respond dir
                         
                         # Add the LLM's response to conversation history before final response
                         if response.content:
-                            conversation_history.append(AIMessage(content=response.content))
+                            # Ensure content is a string before adding to conversation
+                            content_str = response.content if isinstance(response.content, str) else str(response.content)
+                            conversation_history.append(AIMessage(content=content_str))
                         
                         # Record final iteration timing (no tools called)
                         iteration_end = time.time()
@@ -1128,7 +1134,14 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
                     "type": "final_response",
                     "model": llm_model  # Use original model for final response
                 })
-                final_content = final_response.content
+                # Ensure final_content is a string to avoid regex errors
+                if isinstance(final_response.content, str):
+                    final_content = final_response.content
+                elif isinstance(final_response.content, list):
+                    # Handle structured content - join if it's a list
+                    final_content = "\n".join(str(item) for item in final_response.content)
+                else:
+                    final_content = str(final_response.content)
             except asyncio.TimeoutError:
                 # Handle timeout gracefully with a fallback response
                 final_llm_end = time.time()
@@ -1196,7 +1209,15 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
             
             # Remove any <SOURCES> sections the LLM might have added
             import re
-            final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
+            if isinstance(final_content, str):
+                final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
+            elif isinstance(final_content, list):
+                # Handle case where final_content is a list of content blocks
+                final_content = str(final_content)
+                final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
+            else:
+                # Ensure it's a string
+                final_content = str(final_content)
             
             # No validation step needed - let the LLM respond naturally
             
@@ -1352,6 +1373,11 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
         # Find all citation references in the final content
         citation_pattern = r'\[(\d+)\]'
         referenced_citations = set()
+        
+        # Ensure final_content is a string
+        if not isinstance(final_content, str):
+            final_content = str(final_content)
+            
         for match in re.finditer(citation_pattern, final_content):
             referenced_citations.add(int(match.group(1)))
         
@@ -1440,6 +1466,10 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
         # Use non-greedy match to handle titles with nested brackets like [Title with [brackets]]
         markdown_pattern = r'\[(.*?)\]\(([^)]+)\)'
         referenced_sources = {}
+        
+        # Ensure final_content is a string
+        if not isinstance(final_content, str):
+            final_content = str(final_content)
         
         for match in re.finditer(markdown_pattern, final_content):
             title = match.group(1)
