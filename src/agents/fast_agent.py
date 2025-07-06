@@ -1017,11 +1017,24 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     
                     continue
                 else:
-                    # No more tool calls - check if we have comprehensive coverage
+                    # No more tool calls - check if we have comprehensive coverage and haven't already tried coverage guidance
                     unsearched_types = suggested_source_types - source_types_searched
                     
-                    # If we have important unsearched source types and haven't reached iteration limit, encourage more searching
-                    if unsearched_types and iteration < 8:  # Allow up to 8 iterations for comprehensive coverage
+                    # Check if we already provided coverage guidance in a recent iteration
+                    recent_coverage_guidance = False
+                    for timing in timings["iterations"][-2:]:  # Check last 2 iterations
+                        if timing.get("coverage_guidance"):
+                            recent_coverage_guidance = True
+                            break
+                    
+                    # Only provide coverage guidance if:
+                    # 1. We have unsearched types
+                    # 2. We haven't exceeded iteration limit for coverage checks
+                    # 3. We haven't already provided coverage guidance recently
+                    if (unsearched_types and 
+                        iteration < 6 and  # Reduce from 8 to 6 to avoid excessive iterations
+                        not recent_coverage_guidance):  # CRITICAL FIX: Don't repeat coverage guidance
+                        
                         logger.info(f"🔍 Multi-source coverage check: {len(source_types_searched)} searched, {len(unsearched_types)} remaining",
                                    searched=list(source_types_searched),
                                    remaining=list(unsearched_types))
@@ -1041,11 +1054,15 @@ Be intelligent about tool usage - search when information is needed, respond dir
                         })
                         continue
                     else:
-                        # Sufficient coverage or reached iteration limit - prepare for final response
+                        # Sufficient coverage, reached iteration limit, or already provided guidance - prepare for final response
+                        if recent_coverage_guidance:
+                            logger.info(f"🚫 Skipping coverage guidance - already provided in recent iteration")
+                        
                         logger.info(f"✅ Multi-source search complete",
                                    searched_types=list(source_types_searched),
                                    suggested_types=list(suggested_source_types),
-                                   coverage_complete=len(unsearched_types) == 0)
+                                   coverage_complete=len(unsearched_types) == 0,
+                                   recent_guidance_provided=recent_coverage_guidance)
                         
                         # Record final iteration timing (no tools called)
                         iteration_end = time.time()
