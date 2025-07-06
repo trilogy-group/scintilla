@@ -387,6 +387,37 @@ class FastMCPAgent:
         
         return validated_messages
     
+    def _clean_final_response(self, content: str) -> str:
+        """
+        Clean up final response content to remove leftover coverage guidance, 
+        iteration feedback, and other artifacts from failed queries
+        """
+        import re
+        
+        if not isinstance(content, str):
+            content = str(content)
+        
+        # Remove iteration limit messages
+        content = re.sub(r'I searched extensively.*?Here\'s what I found with the available data:\s*', '', content, flags=re.DOTALL)
+        content = re.sub(r'I tried \d+ different search approaches.*?Here\'s what I found:\s*', '', content, flags=re.DOTALL)
+        content = re.sub(r'I reached the maximum number.*?Here\'s what I found:\s*', '', content, flags=re.DOTALL)
+        
+        # Remove coverage guidance messages
+        content = re.sub(r'I\'ve searched.*?for comprehensive coverage\.\s*', '', content, flags=re.DOTALL)
+        content = re.sub(r'Let me search.*?for more information\.\s*', '', content, flags=re.DOTALL)
+        content = re.sub(r'Let me search additional source types.*?\.\s*', '', content, flags=re.DOTALL)
+        
+        # Remove function call artifacts
+        content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<invoke.*?</invoke>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<function_result>.*?</function_result>', '', content, flags=re.DOTALL)
+        
+        # Clean up multiple newlines and whitespace
+        content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
+        content = content.strip()
+        
+        return content
+    
     def _create_llm(self, llm_provider: str, llm_model: str):
         """Create LLM instance"""
         import os
@@ -966,7 +997,21 @@ Be intelligent about tool usage - search when information is needed, respond dir
             # Add conversation history
             timings["conversation_loading"]["start"] = time.time()
             if conversation_id and db_session:
-                conversation_history = await self.load_conversation_history(db_session, conversation_id)
+                loaded_history = await self.load_conversation_history(db_session, conversation_id)
+                # Additional cleanup: for new queries, limit how much old history we include
+                # This prevents mixing of old failed attempts with new queries
+                if loaded_history:
+                    # Check for signs of conversation corruption (too many orphaned tool results)
+                    validated_messages = self._validate_message_sequence_for_claude(loaded_history)
+                    removed_count = len(loaded_history) - len(validated_messages)
+                    
+                    if removed_count > 5:  # If we had to remove more than 5 orphaned messages
+                        logger.warning(f"Detected corrupted conversation history with {removed_count} orphaned tool results - starting fresh")
+                        conversation_history = []  # Start fresh to prevent further corruption
+                    else:
+                        # Only keep the most recent 4 messages (2 conversation turns) to prevent confusion
+                        conversation_history = validated_messages[-4:] if len(validated_messages) > 4 else validated_messages
+                        logger.info(f"Limited conversation history from {len(loaded_history)} to {len(conversation_history)} messages for clarity")
             timings["conversation_loading"]["end"] = time.time()
             timings["conversation_loading"]["duration"] = timings["conversation_loading"]["end"] - timings["conversation_loading"]["start"]
             
@@ -1136,7 +1181,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     content_str = ""
                     if response.content:
                         content_str = response.content if isinstance(response.content, str) else str(response.content)
-                    conversation_history.append(AIMessage(content=content_str))
+                    conversation_history.append(AIMessage(content=content_str, tool_calls=tool_calls_to_execute))
                     conversation_history.extend(tool_results)
                     
                     # Record iteration timing
@@ -1260,6 +1305,9 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
                     final_content = "\n".join(str(item) for item in final_response.content)
                 else:
                     final_content = str(final_response.content)
+                
+                # Clean up any leftover coverage guidance or iteration feedback from stale conversations
+                final_content = self._clean_final_response(final_content)
             except asyncio.TimeoutError:
                 # Handle timeout gracefully with a fallback response
                 final_llm_end = time.time()
