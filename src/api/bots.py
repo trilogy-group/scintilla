@@ -604,8 +604,8 @@ async def delete_bot(
                 detail="Only the bot owner can delete it"
             )
         
-        # Delete bot (cascades will handle associations and owned sources)
-        await db.execute(delete(Bot).where(Bot.bot_id == bot_id))
+        # Delete bot using ORM method to trigger cascade deletes
+        await db.delete(bot)
         await db.commit()
         
         logger.info("Bot deleted successfully", bot_id=bot_id, user_id=user.user_id)
