@@ -372,6 +372,16 @@ CONVERSATION CONTEXT: You maintain conversation context across messages. When us
 - Assistant: [provides ticket list]
 - User: "Is there documentation for these?" ← This refers to the tickets from previous response
 
+🔧 CRITICAL TOOL CALLING PROTOCOL:
+If you need more information to answer a question completely, you MUST make tool calls immediately. 
+NEVER say "Let me search for more information" or describe your intent to search - just make the tool calls directly.
+
+Your response should either be:
+1. **Tool calls** (if you need more information)
+2. **Final answer** (if you have sufficient information)
+
+DO NOT mix these - don't provide partial answers followed by statements about searching more.
+
 DECISION MATRIX - When to use tools vs respond directly:
 
 USE TOOLS when users ask about:
@@ -1017,7 +1027,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     
                     continue
                 else:
-                    # No more tool calls - check if we have comprehensive coverage and haven't already tried coverage guidance
+                    # No tool calls - check multi-source coverage
                     unsearched_types = suggested_source_types - source_types_searched
                     
                     # Check if we already provided coverage guidance in a recent iteration
@@ -1033,7 +1043,7 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     # 3. We haven't already provided coverage guidance recently
                     if (unsearched_types and 
                         iteration < 6 and  # Reduce from 8 to 6 to avoid excessive iterations
-                        not recent_coverage_guidance):  # CRITICAL FIX: Don't repeat coverage guidance
+                        not recent_coverage_guidance):  # Don't repeat coverage guidance
                         
                         logger.info(f"🔍 Multi-source coverage check: {len(source_types_searched)} searched, {len(unsearched_types)} remaining",
                                    searched=list(source_types_searched),
@@ -1063,6 +1073,10 @@ Be intelligent about tool usage - search when information is needed, respond dir
                                    suggested_types=list(suggested_source_types),
                                    coverage_complete=len(unsearched_types) == 0,
                                    recent_guidance_provided=recent_coverage_guidance)
+                        
+                        # Add the LLM's response to conversation history before final response
+                        if response.content:
+                            conversation_history.append(AIMessage(content=response.content))
                         
                         # Record final iteration timing (no tools called)
                         iteration_end = time.time()
