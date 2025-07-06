@@ -394,4 +394,18 @@ class AgentTokenResponse(BaseModel):
 
 class AgentTokenListResponse(BaseModel):
     """List of user's agent tokens"""
-    tokens: List[AgentTokenResponse] 
+    tokens: List[AgentTokenResponse]
+
+
+# Add new simplified response models at the end of the file
+
+class SimpleSource(BaseModel):
+    """Simplified source for the new response format"""
+    title: str = Field(..., description="Source title")
+    url: str = Field(..., description="Source URL")
+
+
+class SimpleQueryResponse(BaseModel):
+    """Simplified query response format with inline markdown links"""
+    answer: str = Field(..., description="Answer with inline markdown links")
+    sources: List[SimpleSource] = Field(..., description="List of sources referenced in the answer") 

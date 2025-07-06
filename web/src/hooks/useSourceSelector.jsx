@@ -329,7 +329,7 @@ export const MessageSourcesUsed = ({ sources, className = "" }) => {
   if (!sources || sources.length === 0) return null
 
   return (
-    <>
+    <div className={`contents ${className}`}>
       {sources.map((source) => (
         <div
           key={source.source_id}
@@ -358,6 +358,6 @@ export const MessageSourcesUsed = ({ sources, className = "" }) => {
           )}
         </div>
       ))}
-    </>
+    </div>
   )
 } 

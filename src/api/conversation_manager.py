@@ -116,14 +116,23 @@ class ConversationManager:
         user_msg_id = uuid.uuid4()
         assistant_msg_id = uuid.uuid4()
         
-        # Save user message with selected bots and sources
+        # Convert UUID objects to strings for JSON serialization
+        def serialize_for_json(obj):
+            """Convert UUID objects to strings for JSON serialization"""
+            if obj is None:
+                return []
+            if isinstance(obj, list):
+                return [str(item) if isinstance(item, uuid.UUID) else item for item in obj]
+            return obj
+        
+        # Save user message with selected bots and sources (convert UUIDs to strings)
         user_msg = Message(
             message_id=user_msg_id,
             conversation_id=conversation_id,
             role="user",
             content=user_message,
-            selected_bots=selected_bots or [],
-            selected_sources=selected_sources or []
+            selected_bots=serialize_for_json(selected_bots),
+            selected_sources=serialize_for_json(selected_sources)
         )
         self.db.add(user_msg)
         

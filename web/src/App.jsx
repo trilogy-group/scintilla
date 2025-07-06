@@ -1011,6 +1011,30 @@ function App() {
                                 </div>
                               </div>
                             )}
+                            
+                            {/* Performance Debug Panel */}
+                            {message.performanceDebug && (
+                              <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600">
+                                <details className="group">
+                                  <summary className="cursor-pointer text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 flex items-center space-x-2 mb-3">
+                                    <span className="text-lg">🔍</span>
+                                    <span className="font-medium">Performance Debug</span>
+                                    <span className="text-xs opacity-75">(click to expand)</span>
+                                  </summary>
+                                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 font-mono text-xs">
+                                    <pre className="whitespace-pre-wrap overflow-x-auto text-gray-700 dark:text-gray-300 leading-relaxed">
+                                      {message.performanceDebug.summary}
+                                    </pre>
+                                    {message.performanceDebug.hasError && (
+                                      <div className="mt-4 p-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded text-red-700 dark:text-red-300 text-sm">
+                                        ⚠️ Performance data collected during error handling
+                                      </div>
+                                    )}
+                                  </div>
+                                </details>
+                              </div>
+                            )}
+                            
                             <div className="text-center mt-4">
                               <p className="text-xs text-gray-400 dark:text-gray-500">
                                 {formatTimestamp(message.timestamp)}

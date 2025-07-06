@@ -236,6 +236,24 @@ export const useScintilla = () => {
               ? { ...msg, content: fullContent, isThinking: false, isStreaming: true }
               : msg
           ))
+        } else if (chunk.type === 'performance_debug') {
+          // Log performance summary to console for debugging
+          console.log('🔍 PERFORMANCE DEBUG:')
+          console.log(chunk.performance_summary)
+          
+          // Store performance data on the message for potential display
+          setMessages(prev => prev.map(msg => 
+            msg.id === assistantMessage.id 
+              ? { 
+                  ...msg, 
+                  performanceDebug: {
+                    summary: chunk.performance_summary,
+                    rawTimings: chunk.raw_timings,
+                    hasError: chunk.error || false
+                  }
+                }
+              : msg
+          ))
         } else if (chunk.type === 'final_response') {
           finalResponseTime = chunkTime
           const timeToFinalResponse = chunkTime - queryStartTime
@@ -244,7 +262,8 @@ export const useScintilla = () => {
           // Set saving flag when final response is received
           setIsSavingConversation(true)
           
-          fullContent = chunk.content
+          // Handle both old format (content) and new format (answer)
+          fullContent = chunk.answer || chunk.content
           setMessages(prev => prev.map(msg => 
             msg.id === assistantMessage.id 
               ? { 
@@ -363,9 +382,11 @@ export const useScintilla = () => {
       const assistantMessage = {
         id: `assistant-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         role: 'assistant',
-        content: response.content || 'No response received',
+        // Handle both old format (content) and new format (answer)
+        content: response.answer || response.content || 'No response received',
         timestamp: new Date(),
         toolCalls: response.tools_used || [],
+        sources: response.sources || [],
         messageId: response.message_id
       }
 

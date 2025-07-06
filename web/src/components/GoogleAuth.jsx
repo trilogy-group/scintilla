@@ -50,6 +50,20 @@ const GoogleAuth = ({ onAuthChange, showOnlyLogin = false }) => {
     }
   }, [])
 
+  // Handle dev mode authentication in useEffect to avoid render-time state updates
+  useEffect(() => {
+    if (authConfig && !authConfig.auth_enabled && !user) {
+      // In dev mode, auto-authenticate as a mock user
+      const mockUser = {
+        name: 'Developer',
+        email: 'dev@ignitetech.com',
+        picture_url: null
+      }
+      setUser(mockUser)
+      onAuthChange?.(mockUser, 'dev-token')
+    }
+  }, [authConfig, user, onAuthChange])
+
   const initializeGoogleAuth = (clientId) => {
     window.google.accounts.id.initialize({
       client_id: clientId,
@@ -149,17 +163,6 @@ const GoogleAuth = ({ onAuthChange, showOnlyLogin = false }) => {
 
   // Don't render if auth is not enabled (dev mode) - auto-authenticate
   if (authConfig && !authConfig.auth_enabled) {
-    // In dev mode, auto-authenticate as a mock user
-    if (!user) {
-      const mockUser = {
-        name: 'Developer',
-        email: 'dev@ignitetech.com',
-        picture_url: null
-      }
-      setUser(mockUser)
-      onAuthChange?.(mockUser, 'dev-token')
-    }
-    
     return (
       <div className="flex items-center space-x-2 text-gray-500">
         <User className="h-5 w-5" />

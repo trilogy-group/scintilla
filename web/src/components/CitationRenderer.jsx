@@ -310,6 +310,37 @@ const createMarkdownComponents = (sources, content, onCitationClick) => ({
     )
   },
   
+  // Custom link renderer for markdown links [title](url)
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 underline hover:no-underline transition-colors cursor-pointer"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Only handle left mouse button
+        if (e.button === 0) {
+          try {
+            window.open(href, '_blank', 'noopener,noreferrer');
+          } catch (error) {
+            console.error('Error opening link:', error);
+            // Fallback: try direct navigation
+            window.location.href = href;
+          }
+        }
+      }}
+      // Keep onClick as fallback but with simpler logic
+      onClick={(e) => {
+        e.preventDefault();
+      }}
+    >
+      {children}
+    </a>
+  ),
+
   // Basic styling for common Markdown elements
   ul: ({ children }) => (
     <ul className="list-disc list-inside mb-3 text-gray-700 dark:text-gray-300 space-y-1">{children}</ul>

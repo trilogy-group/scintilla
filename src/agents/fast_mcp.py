@@ -767,21 +767,30 @@ class FastMCPToolManager:
         # Store sources for instruction retrieval
         self.sources = sources
         
-        # Build server configs 
+        # Build server configs with proper authentication extraction
         self.server_configs = []
         
         for source in sources:
-            # Extract source attributes
+            # Extract source attributes early to avoid greenlet issues
             source_id = source.source_id
             source_name = source.name
-            source_url = source.server_url
-            source_auth_headers = source.auth_headers or {}
+            
+            # Use the same authentication extraction as tool discovery for consistency
+            auth_config = await SimplifiedCredentialManager.get_source_auth(db, source_id)
+            if auth_config:
+                server_url = auth_config["server_url"]
+                auth_headers = auth_config["auth_headers"]
+            else:
+                # Fallback to direct source data if credential manager fails
+                server_url = source.server_url
+                auth_headers = source.auth_headers or {}
+                logger.warning(f"Could not get auth config for source {source_id}, using fallback")
             
             config = MCPServerConfig(
                 source_id=source_id,
                 name=source_name,
-                server_url=source_url,
-                auth_headers=source_auth_headers
+                server_url=server_url,
+                auth_headers=auth_headers
             )
             self.server_configs.append(config)
         

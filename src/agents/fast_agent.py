@@ -9,6 +9,7 @@ Performance improvements:
 5. Context size management to prevent overflow
 """
 
+import asyncio
 import uuid
 import time
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
@@ -36,7 +37,7 @@ SCINTILLA_LOCAL_SCHEMES = [
 ]
 
 # Configuration constants
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 15  # Increased since LLM is now much faster
 CONVERSATION_HISTORY_LIMIT = 10
 TOOL_PREVIEW_LENGTH = 500
 DEFAULT_TEMPERATURE = 0.1
@@ -274,7 +275,14 @@ class FastMCPAgent:
             api_key = os.getenv("ANTHROPIC_API_KEY")
             if not api_key:
                 raise ValueError("ANTHROPIC_API_KEY not set")
-            return ChatAnthropic(model=llm_model, temperature=DEFAULT_TEMPERATURE, api_key=api_key)
+            return ChatAnthropic(
+                model=llm_model, 
+                temperature=DEFAULT_TEMPERATURE, 
+                api_key=api_key,
+                timeout=120.0,  # 2 minute timeout per request for complex queries
+                max_retries=1,  # Reduce retries from default 2 to 1
+                max_tokens=4000  # Limit response length to speed up generation
+            )
             
         elif llm_provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
@@ -287,7 +295,46 @@ class FastMCPAgent:
     
     def _create_system_prompt(self, search_tools: List[BaseTool]) -> str:
         """Create system prompt for LLM"""
-        tools_info = [f"- {tool.name}: {tool.description}" for tool in search_tools]
+        # Enhanced tools info that includes parameter descriptions with examples
+        tools_info = []
+        query_language_guidance = []  # Collect specific guidance for query languages
+        
+        for tool in search_tools:
+            tool_line = f"- {tool.name}: {tool.description}"
+            
+            # Extract important parameter descriptions that contain examples or syntax guidance
+            if hasattr(tool, 'args_schema') and tool.args_schema:
+                param_descriptions = []
+                if hasattr(tool.args_schema, 'model_fields'):
+                    # Pydantic v2
+                    for field_name, field_info in tool.args_schema.model_fields.items():
+                        if hasattr(field_info, 'description') and field_info.description:
+                            desc = field_info.description
+                            # Include descriptions that contain examples or important syntax info
+                            if any(keyword in desc.lower() for keyword in ['example', 'syntax', 'format', 'language', 'query']):
+                                param_descriptions.append(f"  • {field_name}: {desc}")
+                                
+                                # Detect query language patterns and extract specific guidance
+                                self._extract_query_language_guidance(field_name, desc, query_language_guidance)
+                                
+                elif hasattr(tool.args_schema, '__fields__'):
+                    # Pydantic v1
+                    for field_name, field_info in tool.args_schema.__fields__.items():
+                        if hasattr(field_info, 'field_info') and hasattr(field_info.field_info, 'description'):
+                            desc = field_info.field_info.description
+                            # Include descriptions that contain examples or important syntax info
+                            if any(keyword in desc.lower() for keyword in ['example', 'syntax', 'format', 'language', 'query']):
+                                param_descriptions.append(f"  • {field_name}: {desc}")
+                                
+                                # Detect query language patterns and extract specific guidance
+                                self._extract_query_language_guidance(field_name, desc, query_language_guidance)
+                
+                # Add parameter descriptions if we found any with examples
+                if param_descriptions:
+                    tool_line += "\n" + "\n".join(param_descriptions)
+            
+            tools_info.append(tool_line)
+        
         tools_context = "\n".join(tools_info)
         server_context = ", ".join(self.loaded_sources)
         
@@ -308,6 +355,13 @@ class FastMCPAgent:
             instructions_section += "\n📊 DATA COUNT REQUIREMENT:\n"
             instructions_section += "When counting items (tickets, documents, etc.), ALWAYS read count fields like 'total', 'count', or 'size' from responses.\n"
             instructions_section += "Individual items may be limited for display, but count fields show the actual totals.\n"
+        
+        # Build query language specific guidance (NEW ENHANCEMENT)
+        query_guidance_section = ""
+        if query_language_guidance:
+            query_guidance_section = "\n\n🔧 CRITICAL QUERY LANGUAGE REQUIREMENTS:\n"
+            for guidance in set(query_language_guidance):  # Remove duplicates
+                query_guidance_section += f"• {guidance}\n"
         
         return f"""You are Scintilla, IgniteTech's intelligent knowledge assistant with access to {len(search_tools)} search tools from: {server_context}
 
@@ -334,20 +388,167 @@ RESPOND DIRECTLY for:
 - Meta questions about your functions
 
 AVAILABLE SEARCH TOOLS ({len(search_tools)} tools):
-{tools_context}
+{tools_context}{query_guidance_section}
+
+SEARCH STRATEGY:
+- If a search returns empty results, try 1-2 alternative approaches with different parameters
+- If multiple searches return empty results, conclude that the information isn't available
+- Don't repeatedly search with the same tool - try different tools or stop searching
+- When searches return "issues": [] or empty lists, explain this to the user rather than retrying
 
 CITATION REQUIREMENTS (only when using tools):
-- Cite sources using [1], [2], [3] format ONLY when specifically referencing information from that source
+- Cite sources using markdown links [Title](URL) format when referencing information from that source
 - Don't add citations to general introductory sentences or summaries
 - Only cite when the information comes directly from a specific tool result
-- For example: "The ticket PDR-148554 has status 'Requested' [1]" NOT "Here are the tickets [1]:"
-- Focus on citation accuracy - URL formatting and link validation will be handled automatically
-- I will provide a comprehensive Sources section automatically - do NOT add your own <SOURCES> section
+- For example: "The ticket [PDR-148554: Bug Report](https://jira.company.com/browse/PDR-148554) has status 'Requested'" NOT "Here are the tickets [1]:"
+- Use the exact titles and URLs I provide in the citation guidance
+- Focus on citation accuracy - only reference sources that directly support your statements
+- Do NOT add your own <SOURCES> section - I will handle the sources list automatically
 
 CAPABILITY RESPONSE (when asked what you can do):
 "I have access to {len(search_tools)} search tools from {len(self.loaded_sources)} knowledge sources. I can help you find information about technical documentation, code repositories, project details, and more. Just ask me specific questions about topics you're interested in!"
 
 Be intelligent about tool usage - search when information is needed, respond directly when appropriate.{instructions_section}"""
+    
+    def _extract_query_language_guidance(self, field_name: str, description: str, guidance_list: List[str]) -> None:
+        """Extract specific query language guidance from parameter descriptions"""
+        desc_lower = description.lower()
+        field_lower = field_name.lower()
+        
+        # Detect JQL (Jira Query Language) patterns - more permissive detection
+        if 'jql' in field_lower or 'jira query language' in desc_lower:
+            # Always add JQL guidance when we detect JQL, regardless of ORDER BY mention
+            guidance_list.append("JQL (Jira Query Language) requires search criteria before ORDER BY clauses. Use 'project IS NOT EMPTY ORDER BY created DESC' for all tickets, never just 'ORDER BY created DESC'. For recent items, use 'updated >= -1d ORDER BY updated DESC' or 'created >= -1d ORDER BY created DESC'.")
+        
+        # Detect SQL patterns
+        elif ('sql' in field_lower or 'sql query' in desc_lower) and ('select' in desc_lower or 'from' in desc_lower):
+            guidance_list.append("SQL queries must include SELECT and FROM clauses. Follow the provided examples exactly")
+        
+        # Detect GraphQL patterns
+        elif 'graphql' in desc_lower and '{' in description:
+            guidance_list.append("GraphQL queries must be properly formatted with curly braces and field selections as shown in examples")
+        
+        # Generic query language detection for anything with examples and ORDER BY
+        elif 'query' in field_lower and 'order by' in desc_lower and 'example' in desc_lower:
+            guidance_list.append("Query language syntax requires search criteria before ORDER BY clauses. Always include search conditions as shown in the examples")
+    
+    def _parse_invoke_syntax(self, content: str) -> List[Dict]:
+        """
+        Parse text-based <invoke> syntax into LangChain tool call format
+        Handles cases where LLM generates <invoke name="tool"><parameter name="param">value</parameter></invoke>
+        """
+        import re
+        import uuid
+        
+        tool_calls = []
+        
+        # Find all <invoke> blocks
+        invoke_pattern = r'<invoke name="([^"]+)">(.*?)</invoke>'
+        
+        for match in re.finditer(invoke_pattern, content, re.DOTALL):
+            tool_name = match.group(1)
+            params_content = match.group(2)
+            
+            # Parse parameters from <parameter> tags
+            param_pattern = r'<parameter name="([^"]+)">(.*?)</parameter>'
+            arguments = {}
+            
+            for param_match in re.finditer(param_pattern, params_content, re.DOTALL):
+                param_name = param_match.group(1)
+                param_value = param_match.group(2).strip()
+                arguments[param_name] = param_value
+            
+            # Create tool call in LangChain format
+            tool_call = {
+                'name': tool_name,
+                'args': arguments,
+                'id': str(uuid.uuid4())  # Generate unique ID
+            }
+            
+            tool_calls.append(tool_call)
+            logger.info(f"📝 Parsed tool call from <invoke> syntax: {tool_name} with {arguments}")
+        
+        return tool_calls
+    
+    def _generate_performance_summary(self, timings: Dict) -> str:
+        """Generate a formatted performance summary table"""
+        
+        # Calculate totals and averages
+        total_duration = timings["total_duration"]
+        total_tool_calls = len(timings["total_tool_calls"])
+        total_iterations = len(timings["iterations"])
+        
+        # Calculate tool call statistics
+        tool_call_durations = [t["duration"] for t in timings["total_tool_calls"]]
+        avg_tool_call = sum(tool_call_durations) / len(tool_call_durations) if tool_call_durations else 0
+        total_tool_time = sum(tool_call_durations)
+        
+        # Calculate LLM call statistics
+        llm_call_durations = [t["duration"] for t in timings["llm_calls"]]
+        avg_llm_call = sum(llm_call_durations) / len(llm_call_durations) if llm_call_durations else 0
+        total_llm_time = sum(llm_call_durations)
+        
+        # Calculate iteration statistics
+        iteration_durations = [t["duration"] for t in timings["iterations"]]
+        avg_iteration = sum(iteration_durations) / len(iteration_durations) if iteration_durations else 0
+        
+        # Calculate context optimization statistics
+        context_opt_durations = [t["duration"] for t in timings["context_optimization"]]
+        total_context_opt_time = sum(context_opt_durations)
+        
+        # Build the summary table
+        summary_lines = [
+            "🚀 PERFORMANCE BREAKDOWN",
+            "=" * 60,
+            f"📊 OVERVIEW",
+            f"  Total Duration:        {total_duration:.3f}s",
+            f"  Total Iterations:      {total_iterations}",
+            f"  Total Tool Calls:      {total_tool_calls}",
+            "",
+            f"⏱️  TIMING BREAKDOWN",
+            f"  Preprocessing:         {timings['preprocessing']['duration']:.3f}s ({(timings['preprocessing']['duration']/total_duration*100):.1f}%)",
+            f"  Tool Setup:           {timings['tool_setup']['duration']:.3f}s ({(timings['tool_setup']['duration']/total_duration*100):.1f}%)",
+            f"  Conversation Loading:  {timings['conversation_loading']['duration']:.3f}s ({(timings['conversation_loading']['duration']/total_duration*100):.1f}%)",
+            f"  Context Optimization:  {total_context_opt_time:.3f}s ({(total_context_opt_time/total_duration*100):.1f}%)",
+            f"  LLM Calls (Total):     {total_llm_time:.3f}s ({(total_llm_time/total_duration*100):.1f}%)",
+            f"  Tool Execution:        {total_tool_time:.3f}s ({(total_tool_time/total_duration*100):.1f}%)",
+            f"  Citation Building:     {timings['citation_building']['duration']:.3f}s ({(timings['citation_building']['duration']/total_duration*100):.1f}%)",
+            f"  Final Processing:      {timings['final_processing']['duration']:.3f}s ({(timings['final_processing']['duration']/total_duration*100):.1f}%)",
+            "",
+            f"📈 AVERAGES",
+            f"  Average Iteration:     {avg_iteration:.3f}s",
+            f"  Average LLM Call:      {avg_llm_call:.3f}s",
+            f"  Average Tool Call:     {avg_tool_call:.3f}s",
+            "",
+            f"🔧 TOOL CALLS DETAIL"
+        ]
+        
+        # Add individual tool call details
+        for i, tool_call in enumerate(timings["total_tool_calls"]):
+            tool_name = tool_call["tool_name"].replace("ignitetech___atlassian_", "")  # Shorten names
+            summary_lines.append(f"  {i+1}. {tool_name}: {tool_call['duration']:.3f}s (iteration {tool_call['iteration']})")
+        
+        if timings["llm_calls"]:
+            summary_lines.extend([
+                "",
+                f"🤖 LLM CALLS DETAIL"
+            ])
+            
+            for i, llm_call in enumerate(timings["llm_calls"]):
+                call_type = llm_call["type"]
+                iteration = llm_call["iteration"]
+                model_info = f" [{llm_call.get('model', 'unknown')}]" if llm_call.get('model') else ""
+                summary_lines.append(f"  {i+1}. {call_type}: {llm_call['duration']:.3f}s (iteration {iteration}){model_info}")
+        
+        summary_lines.extend([
+            "",
+            f"🎯 PERFORMANCE INSIGHTS",
+            f"  Tool/LLM Ratio:        {(total_tool_time/total_llm_time):.2f}:1" if total_llm_time > 0 else "  Tool/LLM Ratio:        N/A",
+            f"  Processing Efficiency: {((total_tool_time + total_llm_time)/total_duration*100):.1f}% (core work vs overhead)",
+            "=" * 60
+        ])
+        
+        return "\n".join(summary_lines)
     
     async def _execute_tool_calls(
         self, 
@@ -461,7 +662,24 @@ Be intelligent about tool usage - search when information is needed, respond dir
         """Execute query with streaming response and context size management"""
         query_start = time.time()
         
+        # Performance timing collection
+        timings = {
+            "query_start": query_start,
+            "preprocessing": {"start": 0, "end": 0, "duration": 0},
+            "tool_setup": {"start": 0, "end": 0, "duration": 0},
+            "conversation_loading": {"start": 0, "end": 0, "duration": 0},
+            "iterations": [],  # List of iteration timings
+            "total_tool_calls": [],  # Individual tool call timings
+            "context_optimization": [],  # Context optimization timings
+            "llm_calls": [],  # LLM call timings
+            "citation_building": {"start": 0, "end": 0, "duration": 0},
+            "final_processing": {"start": 0, "end": 0, "duration": 0},
+            "query_end": 0,
+            "total_duration": 0
+        }
+        
         # Validate tools available
+        timings["tool_setup"]["start"] = time.time()
         if not self.tools:
             yield {"type": "error", "error": "No tools available. Configure sources first."}
             return
@@ -470,13 +688,19 @@ Be intelligent about tool usage - search when information is needed, respond dir
         if not search_tools:
             yield {"type": "error", "error": "No search tools available"}
             return
+        timings["tool_setup"]["end"] = time.time()
+        timings["tool_setup"]["duration"] = timings["tool_setup"]["end"] - timings["tool_setup"]["start"]
         
         try:
             # PREPROCESS QUERY: Incorporate bot instructions into the query itself
+            timings["preprocessing"]["start"] = time.time()
             original_message = message
             logger.info("🚀 Starting query processing", original_message=original_message)
             
             message = await self._preprocess_query_with_instructions(message)
+            
+            timings["preprocessing"]["end"] = time.time()
+            timings["preprocessing"]["duration"] = timings["preprocessing"]["end"] - timings["preprocessing"]["start"]
             
             if message != original_message:
                 logger.info("🔄 Query was modified by preprocessing", 
@@ -509,8 +733,11 @@ Be intelligent about tool usage - search when information is needed, respond dir
             conversation_history = []
             
             # Add conversation history
+            timings["conversation_loading"]["start"] = time.time()
             if conversation_id and db_session:
                 conversation_history = await self.load_conversation_history(db_session, conversation_id)
+            timings["conversation_loading"]["end"] = time.time()
+            timings["conversation_loading"]["duration"] = timings["conversation_loading"]["end"] - timings["conversation_loading"]["start"]
             
             # Execute conversation loop
             tools_called = []
@@ -518,10 +745,23 @@ Be intelligent about tool usage - search when information is needed, respond dir
             iteration = 0
             tool_results_str = []  # Collect tool results for context management
             
+            # Create a faster model for tool calling if enabled and using slow model
+            fast_llm_with_tools = None
+            from src.config import settings
+            
+            if (settings.enable_fast_tool_calling and 
+                llm_model == "claude-sonnet-4-20250514" and 
+                settings.fast_tool_calling_model != llm_model):
+                logger.info(f"🚀 Using {settings.fast_tool_calling_model} for faster tool calling iterations")
+                fast_llm = self._create_llm(llm_provider, settings.fast_tool_calling_model)
+                fast_llm_with_tools = fast_llm.bind_tools(search_tools)
+            
             while iteration < MAX_TOOL_ITERATIONS:
                 iteration += 1
+                iteration_start = time.time()
                 
                 # Optimize context before each LLM call (but NOT citation context yet)
+                context_opt_start = time.time()
                 optimized_history, optimized_tool_results, _ = self.context_manager.optimize_context(
                     system_prompt=system_prompt,
                     conversation_history=conversation_history,
@@ -529,6 +769,11 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     tool_results=tool_results_str,
                     citation_context=""  # Don't add citation context during tool iterations
                 )
+                context_opt_end = time.time()
+                timings["context_optimization"].append({
+                    "iteration": iteration,
+                    "duration": context_opt_end - context_opt_start
+                })
                 
                 # Build messages for this iteration
                 messages = [SystemMessage(content=system_prompt)]
@@ -551,13 +796,39 @@ Be intelligent about tool usage - search when information is needed, respond dir
                 )
                 logger.info(f"Context usage: ~{estimated_tokens} tokens (iteration {iteration})")
                 
-                # Get LLM response
-                response = await llm_with_tools.ainvoke(messages)
+                # Get LLM response - use faster model for tool calling if available
+                llm_call_start = time.time()
+                current_llm_with_tools = fast_llm_with_tools if fast_llm_with_tools else llm_with_tools
+                model_used = settings.fast_tool_calling_model if fast_llm_with_tools else llm_model
+                logger.info(f"🧠 Using model: {model_used} for iteration {iteration}")
+                response = await current_llm_with_tools.ainvoke(messages)
+                llm_call_end = time.time()
+                timings["llm_calls"].append({
+                    "iteration": iteration,
+                    "duration": llm_call_end - llm_call_start,
+                    "type": "tool_calling",
+                    "model": model_used
+                })
                 
-                # Check for tool calls
+                # Check for tool calls (both structured and text-based formats)
+                tool_calls_to_execute = []
+                
                 if hasattr(response, 'tool_calls') and response.tool_calls:
+                    # Standard LangChain tool calls
+                    tool_calls_to_execute = response.tool_calls
+                elif response.content and '<invoke' in response.content:
+                    # Fallback: Parse text-based tool invocation syntax
+                    logger.warning("⚠️ LLM used text-based tool calling - parsing <invoke> syntax")
+                    tool_calls_to_execute = self._parse_invoke_syntax(response.content)
+                    
+                    # Clean up the response content by removing <invoke> blocks
+                    import re
+                    cleaned_content = re.sub(r'<invoke name="[^"]+">.*?</invoke>', '', response.content, flags=re.DOTALL)
+                    response.content = cleaned_content.strip()
+                
+                if tool_calls_to_execute:
                     # Stream tool call notifications
-                    for tool_call in response.tool_calls:
+                    for tool_call in tool_calls_to_execute:
                         logger.info("🔧 Tool call initiated", 
                                    tool_name=tool_call['name'], 
                                    arguments=tool_call['args'])
@@ -569,9 +840,20 @@ Be intelligent about tool usage - search when information is needed, respond dir
                         }
                     
                     # Execute tools and get results with metadata
+                    tools_exec_start = time.time()
                     tool_results, call_results, tool_metadata = await self._execute_tool_calls(
-                        response.tool_calls, message
+                        tool_calls_to_execute, message
                     )
+                    tools_exec_end = time.time()
+                    
+                    # Record individual tool call timings
+                    for i, tool_call in enumerate(tool_calls_to_execute):
+                        timings["total_tool_calls"].append({
+                            "iteration": iteration,
+                            "tool_name": tool_call['name'],
+                            "duration": tools_exec_end - tools_exec_start,  # We'll improve this later for individual tools
+                            "args": tool_call['args']
+                        })
                     
                     # Store metadata for final citation processing
                     all_tool_metadata.extend(tool_metadata)
@@ -604,16 +886,34 @@ Be intelligent about tool usage - search when information is needed, respond dir
                     conversation_history.append(AIMessage(content=response.content or ""))
                     conversation_history.extend(tool_results)
                     
+                    # Record iteration timing
+                    iteration_end = time.time()
+                    timings["iterations"].append({
+                        "iteration": iteration,
+                        "duration": iteration_end - iteration_start,
+                        "tool_calls": len(tool_calls_to_execute)
+                    })
+                    
                     continue
                 else:
                     # No more tool calls - prepare for final response
+                    # Record final iteration timing (no tools called)
+                    iteration_end = time.time()
+                    timings["iterations"].append({
+                        "iteration": iteration,
+                        "duration": iteration_end - iteration_start,
+                        "tool_calls": 0
+                    })
                     break
             
             # FINAL RESPONSE GENERATION WITH CITATIONS
             # Now we have all tool results and metadata - generate final response with proper citations
             
             # Build citation guidance from collected metadata
+            timings["citation_building"]["start"] = time.time()
             citation_guidance = self._build_citation_guidance(all_tool_metadata)
+            timings["citation_building"]["end"] = time.time()
+            timings["citation_building"]["duration"] = timings["citation_building"]["end"] - timings["citation_building"]["start"]
             
             # Create final prompt with citation guidance - use conversation history instead of recreating tool results
             final_messages = [SystemMessage(content=system_prompt)]
@@ -626,53 +926,123 @@ Be intelligent about tool usage - search when information is needed, respond dir
             # DO NOT add standalone tool results - this causes tool_use_id mismatches
             # The optimized_history already contains proper tool use/result pairs
             
-            # Add citation guidance as a HumanMessage (not SystemMessage to avoid multiple system messages)
+            # Add citation guidance for markdown links
             if citation_guidance:
-                citation_prompt = f"""Based on the tool results above, here is information you can cite:
+                citation_prompt = f"""Available sources for citations:
 
 {citation_guidance}
 
-IMPORTANT CITATION INSTRUCTIONS:
-1. Use [1], [2], [3] format when citing specific information from sources
-2. Only cite when directly referencing information from a source
-3. Match citation numbers to the source list above
-4. Keep ticket IDs as plain text (like PDR-148559, not links)
-5. Add citations for EACH ticket you mention - if you mention 5 tickets, use [1], [2], [3], [4], [5]
-6. Citations should appear in the order of the source list above
-7. Focus on accuracy - formatting will be validated and fixed automatically
-
-EXAMPLE: "The ticket PDR-148559 has status 'Closed' [1] and PDR-148558 also has status 'Closed' [2]."
-
-Please provide your response with proper citations based on the tool results."""
+IMPORTANT: Use markdown links exactly as shown above when citing these sources. Format: [Title](URL)"""
                 
                 final_messages.append(HumanMessage(content=citation_prompt))
             
-            # Get final response with proper citations
-            final_response = await llm.ainvoke(final_messages)
-            final_content = final_response.content
+            # Get final response with proper citations (with timeout handling)
+            final_llm_start = time.time()
+            try:
+                final_response = await llm.ainvoke(final_messages)
+                final_llm_end = time.time()
+                timings["llm_calls"].append({
+                    "iteration": "final",
+                    "duration": final_llm_end - final_llm_start,
+                    "type": "final_response",
+                    "model": llm_model  # Use original model for final response
+                })
+                final_content = final_response.content
+            except asyncio.TimeoutError:
+                # Handle timeout gracefully with a fallback response
+                final_llm_end = time.time()
+                timings["llm_calls"].append({
+                    "iteration": "final",
+                    "duration": final_llm_end - final_llm_start,
+                    "type": "final_response_timeout",
+                    "model": llm_model,
+                    "error": "timeout"
+                })
+                
+                # Generate a fallback response based on tool results
+                if tools_called:
+                    tool_summary = f"I used {len(tools_called)} tools and found relevant information, but the final response generation timed out. "
+                    
+                    # Extract key information from recent tool calls
+                    recent_results = []
+                    for tool_call in tools_called[-2:]:  # Last 2 tool calls
+                        result = tool_call.get('result', '')
+                        if result and len(result) > 20:
+                            preview = result[:200].replace('\n', ' ')
+                            if len(result) > 200:
+                                preview += "..."
+                            recent_results.append(f"• {preview}")
+                    
+                    if recent_results:
+                        final_content = tool_summary + "Here's what I found:\n\n" + "\n".join(recent_results)
+                    else:
+                        final_content = tool_summary + "Please try rephrasing your question or asking something more specific."
+                else:
+                    final_content = "I encountered a timeout while generating the response. Please try rephrasing your question."
+                
+                logger.warning("Final LLM response timed out, using fallback response", 
+                              tools_used=len(tools_called), 
+                              timeout_duration=final_llm_end - final_llm_start)
             
             # Process final response with citations
+            timings["final_processing"]["start"] = time.time()
             if iteration >= MAX_TOOL_ITERATIONS:
-                final_content = "I've reached the maximum number of tool iterations. Here's what I found:\n\n" + final_content
+                # Analyze tool results to provide better feedback
+                empty_results_count = 0
+                tool_attempts = {}
+                
+                for tool_call in tools_called:
+                    tool_name = tool_call.get('tool', 'unknown')
+                    tool_attempts[tool_name] = tool_attempts.get(tool_name, 0) + 1
+                    
+                    # Check if result appears to be empty
+                    result = tool_call.get('result', '')
+                    if ('[]' in result or '"issues": []' in result or 
+                        '"total": 0' in result or '"total": -1' in result or
+                        len(result.strip()) < 50):
+                        empty_results_count += 1
+                
+                # Provide better feedback based on what happened
+                if empty_results_count >= iteration * 0.7:  # 70%+ empty results
+                    iteration_feedback = f"I searched extensively but couldn't find results matching your query. I tried {iteration} different search approaches, but most returned empty results. This might mean:\n\n• The information doesn't exist in the connected sources\n• The search terms need to be more specific\n• Different sources might have the information you're looking for\n\nHere's what I found with the available data:\n\n"
+                elif len(tool_attempts) == 1:  # Repeated same tool
+                    tool_name = list(tool_attempts.keys())[0]
+                    iteration_feedback = f"I tried the same search tool ({tool_name}) {iteration} times with different parameters but reached the iteration limit. Here's the best result I found:\n\n"
+                else:
+                    iteration_feedback = f"I reached the maximum number of search iterations ({iteration} attempts across {len(tool_attempts)} different tools). Here's what I found:\n\n"
+                
+                final_content = iteration_feedback + final_content
             
             # Remove any <SOURCES> sections the LLM might have added
             import re
             final_content = re.sub(r'<SOURCES>.*?</SOURCES>', '', final_content, flags=re.DOTALL).strip()
             
-            # LLM-BASED VALIDATION STEP - Use LLM intelligence to validate and fix issues
-            if citation_guidance and all_tool_metadata:
-                final_content = await self._validate_and_fix_response(
-                    llm, final_content, citation_guidance, all_tool_metadata
-                )
+            # No validation step needed - let the LLM respond naturally
             
-            # SKIP post-processing clickable links - we want only [1], [2], [3] citations to be clickable
+            # SKIP post-processing clickable links - we want markdown links [Title](URL) to be preserved as-is
             # final_content = self._create_clickable_links(final_content, all_tool_metadata)
             
-            # Build sources list from metadata
-            sources = self._build_sources_from_metadata(all_tool_metadata, final_content)
+            # Build sources list from metadata using simple format
+            sources = self._build_sources_from_metadata_simple(all_tool_metadata, final_content)
+            timings["final_processing"]["end"] = time.time()
+            timings["final_processing"]["duration"] = timings["final_processing"]["end"] - timings["final_processing"]["start"]
             
             # Generate processing stats including context management info
             total_tools_called = len(tools_called)
+            
+            # Finalize timing data
+            timings["query_end"] = time.time()
+            timings["total_duration"] = timings["query_end"] - timings["query_start"]
+            
+            # Generate performance summary table
+            performance_summary = self._generate_performance_summary(timings)
+            
+            # Yield performance data as debug info
+            yield {
+                "type": "performance_debug",
+                "performance_summary": performance_summary,
+                "raw_timings": timings
+            }
             
             yield {
                 "type": "final_response",
@@ -689,7 +1059,8 @@ Please provide your response with proper citations based on the tool results."""
                     "context_tokens_used": estimated_tokens,
                     "context_optimized": len(conversation_history) != len(optimized_history),
                     "conversation_messages_kept": len(optimized_history) if optimized_history else 0,
-                    "conversation_messages_total": len(conversation_history) if conversation_history else 0
+                    "conversation_messages_total": len(conversation_history) if conversation_history else 0,
+                    "performance_breakdown": performance_summary
                 }
             }
             
@@ -697,6 +1068,19 @@ Please provide your response with proper citations based on the tool results."""
             
         except Exception as e:
             logger.exception("Query execution failed")
+            
+            # Generate performance data even on error
+            timings["query_end"] = time.time()
+            timings["total_duration"] = timings["query_end"] - timings["query_start"]
+            performance_summary = self._generate_performance_summary(timings)
+            
+            yield {
+                "type": "performance_debug",
+                "performance_summary": performance_summary,
+                "raw_timings": timings,
+                "error": True
+            }
+            
             yield {
                 "type": "error", 
                 "error": f"Query failed: {str(e)}",
@@ -708,11 +1092,17 @@ Please provide your response with proper citations based on the tool results."""
         if not tool_metadata:
             return ""
         
-        citation_lines = []
-        source_num = 1
+        # NEW: Build markdown link guidance instead of numbered citations
+        return self._build_markdown_link_guidance(tool_metadata)
+    
+    def _build_markdown_link_guidance(self, tool_metadata: List[Dict]) -> str:
+        """Build simple markdown link guidance"""
+        if not tool_metadata:
+            return ""
+        
+        guidance_lines = []
         
         for meta in tool_metadata:
-            tool_name = meta['tool_name']
             metadata = meta['metadata']
             
             # Skip if no useful information
@@ -724,7 +1114,7 @@ Please provide your response with proper citations based on the tool results."""
                 metadata.get('identifiers', {}).get('tickets') and
                 len(metadata.get('urls', [])) > 1):
                 
-                # Create separate citation entry for each ticket
+                # Create separate guidance for each ticket
                 tickets = metadata['identifiers']['tickets'].split(',')
                 urls = metadata.get('urls', [])
                 titles = metadata.get('titles', [])
@@ -751,112 +1141,16 @@ Please provide your response with proper citations based on the tool results."""
                     if not ticket_title:
                         ticket_title = f"{ticket}: Jira Issue"
                     
-                    # Build citation entry for this ticket
-                    citation_parts = [f"[{source_num}] {ticket_title}"]
-                    
                     if ticket_url:
-                        citation_parts.append(f"   URL: {ticket_url}")
-                    
-                    citation_parts.append(f"   Ticket: {ticket}")
-                    citation_parts.append(f"   Type: jira")
-                    
-                    citation_lines.extend(citation_parts)
-                    citation_lines.append("")  # Empty line between sources
-                    source_num += 1
+                        guidance_lines.append(f"- [{ticket_title}]({ticket_url})")
             else:
                 # Standard single-source handling
-                citation_parts = []
-                
-                # Use first title if available
-                if metadata.get('titles'):
-                    citation_parts.append(f"[{source_num}] {metadata['titles'][0]}")
-                else:
-                    citation_parts.append(f"[{source_num}] {tool_name} results")
-                
-                # Add primary URL if available
-                if metadata.get('urls'):
-                    citation_parts.append(f"   URL: {metadata['urls'][0]}")
-                
-                # Add identifiers
-                if metadata.get('identifiers'):
-                    ids = metadata['identifiers']
-                    if ids.get('primary_ticket'):
-                        citation_parts.append(f"   Ticket: {ids['primary_ticket']}")
-                    if ids.get('pr_number'):
-                        citation_parts.append(f"   PR: #{ids['pr_number']}")
-                    if ids.get('issue_number'):
-                        citation_parts.append(f"   Issue: #{ids['issue_number']}")
-                
-                # Add source type
-                if metadata.get('source_type'):
-                    citation_parts.append(f"   Type: {metadata['source_type']}")
-                
-                citation_lines.extend(citation_parts)
-                citation_lines.append("")  # Empty line between sources
-                source_num += 1
+                if metadata.get('urls') and metadata.get('titles'):
+                    title = metadata['titles'][0]
+                    url = metadata['urls'][0]
+                    guidance_lines.append(f"- [{title}]({url})")
         
-        return "\n".join(citation_lines)
-    
-    def _create_clickable_links(self, content: str, tool_metadata: List[Dict]) -> str:
-        """Create clickable links for identifiers found in content"""
-        import re
-        
-        # Build mapping of identifiers to URLs
-        id_to_url = {}
-        
-        for meta in tool_metadata:
-            metadata = meta['metadata']
-            urls = metadata.get('urls', [])
-            identifiers = metadata.get('identifiers', {})
-            
-            if not urls:
-                continue
-            
-            primary_url = urls[0]
-            
-            # Map ticket IDs
-            if identifiers.get('primary_ticket'):
-                id_to_url[identifiers['primary_ticket']] = primary_url
-            
-            # Map all tickets if available
-            if identifiers.get('tickets'):
-                for ticket in identifiers['tickets'].split(','):
-                    if ticket and ticket not in id_to_url:
-                        # Try to construct URL for this ticket
-                        if 'jira' in metadata.get('source_type', ''):
-                            base_url = primary_url.rsplit('/browse/', 1)[0]
-                            id_to_url[ticket] = f"{base_url}/browse/{ticket}"
-        
-        # Replace identifiers with clickable links, but avoid ones already in markdown links
-        def replace_identifier(match):
-            full_match = match.group(0)
-            identifier = match.group(1)
-            start_pos = match.start()
-            
-            # Check if this identifier is already inside a markdown link
-            # Look for preceding '[' and check if there's a corresponding '](' pattern
-            preceding_text = content[:start_pos]
-            if '[' in preceding_text:
-                # Find the last '[' before this position
-                last_bracket = preceding_text.rfind('[')
-                if last_bracket != -1:
-                    # Check if there's a '](' pattern after our identifier
-                    following_text = content[match.end():]
-                    if following_text.startswith(']('):
-                        # This identifier is already part of a markdown link, don't replace
-                        return full_match
-            
-            # Safe to replace
-            if identifier in id_to_url:
-                url = id_to_url[identifier]
-                return f'[{identifier}]({url})'
-            return full_match
-        
-        # Pattern for ticket IDs
-        ticket_pattern = r'\b([A-Z][A-Z0-9]*-\d+)\b'
-        content = re.sub(ticket_pattern, replace_identifier, content)
-        
-        return content
+        return "\n".join(guidance_lines)
     
     def _build_sources_from_metadata(self, tool_metadata: List[Dict], final_content: str) -> List[Dict]:
         """Build sources list from tool metadata, filtered by what's actually cited"""
@@ -945,6 +1239,101 @@ Please provide your response with proper citations based on the tool results."""
         
         return sources
 
+    def _build_sources_from_metadata_simple(self, tool_metadata: List[Dict], final_content: str) -> List[Dict]:
+        """Build simple sources list from tool metadata for markdown links"""
+        import re
+        
+        # Find all markdown links in the final content
+        # Use non-greedy match to handle titles with nested brackets like [Title with [brackets]]
+        markdown_pattern = r'\[(.*?)\]\(([^)]+)\)'
+        referenced_sources = {}
+        
+        for match in re.finditer(markdown_pattern, final_content):
+            title = match.group(1)
+            url = match.group(2)
+            referenced_sources[title] = url
+        
+        sources = []
+        
+        for meta in tool_metadata:
+            metadata = meta['metadata']
+            
+            # Skip if no useful information
+            if not any([metadata.get('urls'), metadata.get('titles'), metadata.get('identifiers')]):
+                continue
+            
+            # Special handling for Jira results with multiple tickets
+            if (metadata.get('source_type') == 'jira' and 
+                metadata.get('identifiers', {}).get('tickets') and
+                len(metadata.get('urls', [])) > 1):
+                
+                # Create separate source entry for each ticket
+                tickets = metadata['identifiers']['tickets'].split(',')
+                urls = metadata.get('urls', [])
+                titles = metadata.get('titles', [])
+                
+                for i, ticket in enumerate(tickets):
+                    ticket = ticket.strip()
+                    if not ticket:
+                        continue
+                    
+                    # Use corresponding URL if available
+                    ticket_url = None
+                    for url in urls:
+                        if f'/browse/{ticket}' in url:
+                            ticket_url = url
+                            break
+                    
+                    # Find title for this ticket
+                    ticket_title = None
+                    for title in titles:
+                        if ticket in title:
+                            ticket_title = title
+                            break
+                    
+                    if not ticket_title:
+                        ticket_title = f"{ticket}: Jira Issue"
+                    
+                    # Check if this source is referenced in the content (flexible matching)
+                    is_referenced = False
+                    for ref_title, ref_url in referenced_sources.items():
+                        if (ticket_title == ref_title or  # Exact title match
+                            ticket in ref_title or  # Ticket ID in referenced title
+                            (ticket_url and ticket_url == ref_url)):  # URL match
+                            is_referenced = True
+                            break
+                    
+                    if is_referenced and ticket_url:
+                        # Avoid duplicates by checking if URL already exists
+                        if not any(s.get("url") == ticket_url for s in sources):
+                            sources.append({
+                                "title": ticket_title,
+                                "url": ticket_url
+                            })
+            else:
+                # Standard single-source handling
+                if metadata.get('urls') and metadata.get('titles'):
+                    title = metadata['titles'][0]
+                    url = metadata['urls'][0]
+                    
+                    # Check if this source is referenced in the content (flexible matching)
+                    is_referenced = False
+                    for ref_title, ref_url in referenced_sources.items():
+                        if (title == ref_title or  # Exact title match
+                            url == ref_url):  # URL match
+                            is_referenced = True
+                            break
+                    
+                    if is_referenced:
+                        # Avoid duplicates by checking if URL already exists
+                        if not any(s.get("url") == url for s in sources):
+                            sources.append({
+                                "title": title,
+                                "url": url
+                            })
+        
+        return sources
+
     async def _validate_and_fix_response(self, llm, final_content, citation_guidance, all_tool_metadata):
         """Use LLM intelligence to validate and fix common issues in responses"""
         validation_prompt = f"""Fix any issues in this response and return ONLY the corrected content without explanations.
@@ -952,17 +1341,17 @@ Please provide your response with proper citations based on the tool results."""
 ORIGINAL RESPONSE:
 {final_content}
 
-AVAILABLE CITATION INFORMATION:
+AVAILABLE SOURCES FOR MARKDOWN LINKS:
 {citation_guidance}
 
 ISSUES TO FIX:
 1. Broken or malformed URLs - remove or fix them
-2. Missing citations - add appropriate [1], [2], [3] citations
-3. Incorrect citation numbers - match them to the source list above
+2. Missing markdown links - add appropriate [Source Title](URL) links for referenced sources
+3. Incorrect URLs or titles - match them to the source information above
 4. Redundant or duplicate information
 5. Poor formatting or structure
 
-CRITICAL: Return ONLY the corrected response content. Do NOT add sections like "Issues Fixed:", explanations, or meta-commentary about what was changed. Just provide the clean, corrected response."""
+CRITICAL: Return ONLY the corrected response content. Do NOT add sections like "Issues Fixed:", explanations, or meta-commentary about what was changed. Just provide the clean, corrected response with proper markdown links."""
 
         try:
             validation_response = await llm.ainvoke([HumanMessage(content=validation_prompt)])
@@ -1007,28 +1396,36 @@ CRITICAL: Return ONLY the corrected response content. Do NOT add sections like "
         
         logger.info("✅ Building preprocessing prompt", instruction_sources=len(instruction_context))
         
-        # Create preprocessing prompt
-        preprocessing_prompt = f"""You are a query preprocessor. Add ONLY the required filters to the user's query. Keep it brief and natural.
+        # Create preprocessing prompt - TOOL-AGNOSTIC and NATURAL LANGUAGE focused
+        preprocessing_prompt = f"""You are a natural language query enhancer. Add business context to user queries while keeping them conversational and tool-agnostic.
 
-SOURCE INSTRUCTIONS:
+BUSINESS CONTEXT:
 {chr(10).join(instruction_context)}
 
-TASK: Add required filters to the query. Return ONLY the modified query, nothing else.
+TASK: Enhance the user's query by adding relevant business context mentioned above. Keep it natural and conversational.
 
 EXAMPLES:
-- "what tickets we have" → "what tickets we have in XINETBSE project"
-- "open tickets" → "open XINETBSE tickets"
-- "show me bugs" → "show me bugs in XINETBSE project"
+✅ GOOD:
+- "how many tickets are open?" → "how many tickets are open in the XINETBSE project?"
+- "show me recent issues" → "show me recent issues from the XINETBSE project"
+- "find documentation" → "find documentation in the Engineering Knowledge Base space"
 
-REQUIREMENTS:
-- Maximum 3x the length of original query
-- Only add necessary filters
-- Keep it natural and conversational
-- Return ONLY the modified query
+❌ BAD - Don't do this:
+- "how many tickets?" → "project = XINETBSE AND status = Open" (technical syntax)
+- "recent issues" → "project = XINETBSE AND created > -30d" (query language)
+- "find docs" → "space.key = 'EKB' AND type = page" (technical format)
+
+RULES:
+- Maximum 2x the length of the original query
+- Add business context (project names, space names) in natural language
+- Keep it conversational and human-readable
+- NEVER use technical syntax, query languages, or tool-specific formats
+- If the query already mentions the required context, don't duplicate it
+- Return ONLY the enhanced query, NO explanations, NO meta-commentary
 
 USER QUERY: "{user_query}"
 
-MODIFIED QUERY:"""
+ENHANCED QUERY (return only the query, nothing else):"""
 
         logger.debug("📝 Preprocessing prompt created", prompt_length=len(preprocessing_prompt))
 
@@ -1046,12 +1443,12 @@ MODIFIED QUERY:"""
                        modified_length=len(modified_query))
             
             # Validation checks
-            if len(modified_query) > len(user_query) * 3:  # Prevent runaway responses
+            if len(modified_query) > len(user_query) * 2:  # Prevent runaway responses
                 logger.warning("❌ Query preprocessing resulted in overly long query, using original", 
                               original_length=len(user_query),
                               modified_length=len(modified_query),
                               ratio=len(modified_query) / len(user_query),
-                              max_allowed_ratio=3.0)
+                              max_allowed_ratio=2.0)
                 return user_query
             
             if len(modified_query) < 3:  # Prevent empty responses

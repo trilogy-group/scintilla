@@ -160,6 +160,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                     {/* Source Selector Button */}
                     <div className="relative">
                       <button
+                        type="button"
                         onClick={toggleSelector}
                         className="flex items-center space-x-2 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
@@ -195,6 +196,7 @@ const LandingPage = ({ onSearch, onNavigate, isAuthenticated = false, currentUse
                     {/* Clear Sources Button */}
                     {selectedSources.length > 0 && (
                       <button
+                        type="button"
                         onClick={clearSelectedSources}
                         className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >

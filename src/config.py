@@ -15,7 +15,11 @@ class Settings(BaseSettings):
     # Default LLM settings
     default_llm_provider: str = Field(default="anthropic", env="DEFAULT_LLM_PROVIDER")
     default_openai_model: str = Field(default="gpt-4o", env="DEFAULT_OPENAI_MODEL")
-    default_anthropic_model: str = Field(default="claude-sonnet-4-20250514	", env="DEFAULT_ANTHROPIC_MODEL")
+    default_anthropic_model: str = Field(default="claude-sonnet-4-20250514", env="DEFAULT_ANTHROPIC_MODEL")
+    
+    # Performance optimization settings
+    fast_tool_calling_model: str = Field(default="claude-3-5-sonnet-20240620", env="FAST_TOOL_CALLING_MODEL")
+    enable_fast_tool_calling: bool = Field(default=True, env="ENABLE_FAST_TOOL_CALLING")
     
     # AWS
     aws_region: str = Field(default="us-east-1", env="AWS_REGION")
