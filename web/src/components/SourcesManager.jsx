@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { 
   Plus, 
   Trash2, 
+  Edit2,
   Loader, 
   AlertCircle, 
   X, 
@@ -21,10 +22,14 @@ export const SourcesManager = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
-
+  const [showEditForm, setShowEditForm] = useState(false)
+  const [editingSource, setEditingSource] = useState(null)
 
   const [refreshingSource, setRefreshingSource] = useState(null)
   const [expandedTools, setExpandedTools] = useState({})
+  
+  // Available users for sharing
+  const [availableUsers, setAvailableUsers] = useState([])
 
   const [formData, setFormData] = useState({
     name: '',
@@ -34,7 +39,8 @@ export const SourcesManager = () => {
     auth_method: 'headers', // 'headers' or 'url_embedded'
     auth_headers: '',
     credentials: {},
-    is_public: false
+    is_public: false,
+    shared_with_users: []
   })
 
   // Authentication method configurations
@@ -63,6 +69,7 @@ export const SourcesManager = () => {
 
   useEffect(() => {
     loadSources()
+    loadAvailableUsers()
   }, [])
 
   const loadSources = async () => {
@@ -78,7 +85,24 @@ export const SourcesManager = () => {
     }
   }
 
+  const loadAvailableUsers = async () => {
+    try {
+      const userData = await api.getUsers()
+      setAvailableUsers(userData)
+    } catch (err) {
+      console.error('Failed to load users:', err.message)
+      // Don't show error for users as it's not critical
+    }
+  }
 
+  const handleUserSharingToggle = (userId, checked) => {
+    setFormData(prev => ({
+      ...prev,
+      shared_with_users: checked
+        ? [...prev.shared_with_users, userId]
+        : prev.shared_with_users.filter(id => id !== userId)
+    }))
+  }
 
   const resetForm = () => {
     setFormData({
@@ -89,7 +113,8 @@ export const SourcesManager = () => {
       auth_method: 'headers',
       auth_headers: '',
       credentials: {},
-      is_public: false
+      is_public: false,
+      shared_with_users: []
     })
   }
 
@@ -129,6 +154,72 @@ export const SourcesManager = () => {
     }
   }
 
+  const handleEditSource = (source) => {
+    // Extract existing values and format them for the form
+    let authHeaders = ''
+    let authMethod = 'headers'
+    
+    // Try to determine auth method from existing data
+    if (source.credentials && source.credentials.auth_headers) {
+      authMethod = 'headers'
+      authHeaders = JSON.stringify(source.credentials.auth_headers, null, 2)
+    } else if (source.server_url && (source.server_url.includes('x-api-key=') || source.server_url.includes('api_key=') || source.server_url.includes('token='))) {
+      authMethod = 'url_embedded'
+    }
+
+    setFormData({
+      name: source.name || '',
+      description: source.description || '',
+      instructions: source.instructions || '',
+      server_url: source.server_url || '',
+      auth_method: authMethod,
+      auth_headers: authHeaders,
+      credentials: source.credentials || {},
+      is_public: source.is_public || false,
+      shared_with_users: source.shared_with_users || []
+    })
+    setEditingSource(source)
+    setShowEditForm(true)
+  }
+
+  const handleUpdateSource = async (e) => {
+    e.preventDefault()
+    try {
+      let updateData = {
+        name: formData.name,
+        description: formData.description,
+        instructions: formData.instructions,
+        server_url: formData.server_url,
+        is_public: formData.is_public || false,
+        shared_with_users: formData.shared_with_users || [],
+        credentials: {}
+      }
+
+      // Handle authentication based on method
+      if (formData.auth_method === 'headers') {
+        // Parse JSON headers
+        try {
+          const headers = JSON.parse(formData.auth_headers || '{}')
+          updateData.credentials = { auth_headers: headers }
+        } catch (err) {
+          setError('Invalid JSON format in auth headers')
+          return
+        }
+      } else {
+        // URL-embedded: use the URL as-is, empty credentials
+        updateData.credentials = {}
+      }
+
+      await api.updateSource(editingSource.source_id, updateData)
+      setShowEditForm(false)
+      setEditingSource(null)
+      resetForm()
+      await loadSources()
+    } catch (err) {
+      setError('Failed to update source: ' + err.message)
+    }
+  }
+
   const handleDeleteSource = async (sourceId, force = false) => {
     try {
       const result = await api.deleteSource(sourceId, force)
@@ -155,8 +246,6 @@ export const SourcesManager = () => {
       setError('Failed to delete source: ' + err.message)
     }
   }
-
-
 
   const getToolStatusColor = (status) => {
     switch (status) {
@@ -387,6 +476,34 @@ export const SourcesManager = () => {
               Public sources can be used by all users. Keep unchecked for personal sources only.
             </p>
 
+            {/* User Sharing Section */}
+            {!formData.is_public && availableUsers.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Share with Users
+                </label>
+                <div className="max-h-32 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-lg p-3 space-y-2">
+                  {availableUsers.map(user => (
+                    <div key={user.user_id} className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id={`user-${user.user_id}`}
+                        checked={formData.shared_with_users.includes(user.user_id)}
+                        onChange={(e) => handleUserSharingToggle(user.user_id, e.target.checked)}
+                        className="rounded border-gray-300 text-scintilla-600 focus:ring-scintilla-500"
+                      />
+                      <label htmlFor={`user-${user.user_id}`} className="text-sm text-gray-700 dark:text-gray-300">
+                        {user.name} ({user.email})
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Selected users will be able to use this source in their bots.
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center space-x-3 pt-4">
               <button
                 type="submit"
@@ -398,6 +515,185 @@ export const SourcesManager = () => {
                 type="button"
                 onClick={() => {
                   setShowCreateForm(false)
+                  resetForm()
+                }}
+                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Edit Source Form */}
+      {showEditForm && (
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Edit Source
+          </h3>
+          <form onSubmit={handleUpdateSource} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                  placeholder="e.g., My MCP Server"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Authentication Method *
+                </label>
+                <select
+                  required
+                  value={formData.auth_method}
+                  onChange={(e) => handleAuthMethodChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                >
+                  {Object.entries(AUTH_METHODS).map(([method, config]) => (
+                    <option key={method} value={method}>
+                      {config.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {AUTH_METHODS[formData.auth_method].description}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Server URL *
+              </label>
+              <input
+                type="url"
+                required
+                value={formData.server_url}
+                onChange={(e) => setFormData({...formData, server_url: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                placeholder={formData.auth_method === 'url_embedded' 
+                  ? 'https://mcp-server.example.com/sse?x-api-key=your-key'
+                  : 'https://mcp-server.example.com/sse'
+                }
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {formData.auth_method === 'url_embedded' 
+                  ? 'Complete MCP server URL with authentication parameters (x-api-key, tokens, etc.) included as query parameters'
+                  : 'MCP server base URL (e.g., https://mcp-server.example.com or https://mcp-server.example.com/sse) - authentication will be sent separately in headers'
+                }
+              </p>
+            </div>
+
+            {/* Header-based authentication field */}
+            {formData.auth_method === 'headers' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Authentication Headers *
+                </label>
+                <textarea
+                  required
+                  value={formData.auth_headers}
+                  onChange={(e) => setFormData({...formData, auth_headers: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white font-mono text-sm"
+                  rows={3}
+                  placeholder={AUTH_METHODS.headers.placeholder}
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  JSON object with authentication headers. Common examples: Authorization (Bearer/Basic), custom API headers, etc.
+                </p>
+              </div>
+            )}
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Description
+              </label>
+              <textarea
+                value={formData.description}
+                onChange={(e) => setFormData({...formData, description: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                rows={2}
+                placeholder="Optional description of this source"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Instructions
+              </label>
+              <textarea
+                value={formData.instructions}
+                onChange={(e) => setFormData({...formData, instructions: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-scintilla-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                rows={2}
+                placeholder="Optional instructions for this source"
+              />
+            </div>
+
+            {/* Public Access Checkbox */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="is_public_edit"
+                checked={formData.is_public || false}
+                onChange={(e) => setFormData({...formData, is_public: e.target.checked})}
+                className="rounded border-gray-300 text-scintilla-600 focus:ring-scintilla-500"
+              />
+              <label htmlFor="is_public_edit" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Make this source public
+              </label>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
+              Public sources can be used by all users. Keep unchecked for personal sources only.
+            </p>
+
+            {/* User Sharing Section */}
+            {!formData.is_public && availableUsers.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Share with Users
+                </label>
+                <div className="max-h-32 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-lg p-3 space-y-2">
+                  {availableUsers.map(user => (
+                    <div key={user.user_id} className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id={`edit-user-${user.user_id}`}
+                        checked={formData.shared_with_users.includes(user.user_id)}
+                        onChange={(e) => handleUserSharingToggle(user.user_id, e.target.checked)}
+                        className="rounded border-gray-300 text-scintilla-600 focus:ring-scintilla-500"
+                      />
+                      <label htmlFor={`edit-user-${user.user_id}`} className="text-sm text-gray-700 dark:text-gray-300">
+                        {user.name} ({user.email})
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Selected users will be able to use this source in their bots.
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center space-x-3 pt-4">
+              <button
+                type="submit"
+                className="px-4 py-2 bg-scintilla-500 text-white rounded-lg hover:bg-scintilla-600 transition-colors"
+              >
+                Update Source
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditForm(false)
                   resetForm()
                 }}
                 className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
@@ -437,6 +733,14 @@ export const SourcesManager = () => {
                   ) : (
                     <RefreshCw className="h-4 w-4" />
                   )}
+                </button>
+
+                <button
+                  onClick={() => handleEditSource(source)}
+                  className="p-2 text-gray-400 hover:text-blue-500 transition-colors"
+                  title="Edit source"
+                >
+                  <Edit2 className="h-4 w-4" />
                 </button>
 
                 <button

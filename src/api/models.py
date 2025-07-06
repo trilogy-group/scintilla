@@ -182,6 +182,17 @@ class SourceCreate(BaseModel):
     shared_with_users: Optional[List[UUID]] = Field(default=[], description="User IDs to share this source with")
 
 
+class SourceUpdate(BaseModel):
+    """Request to update an existing source"""
+    name: Optional[str] = Field(None, description="Display name for the source")
+    description: Optional[str] = Field(None, description="Source description")
+    instructions: Optional[str] = Field(None, description="Instructions for bot usage")
+    server_url: Optional[str] = Field(None, description="Base URL of the MCP server")
+    credentials: Optional[Dict[str, Any]] = Field(None, description="Credential fields - can contain auth_headers object or other auth data")
+    is_public: Optional[bool] = Field(None, description="Whether source is available to all users")
+    shared_with_users: Optional[List[UUID]] = Field(None, description="User IDs to share this source with")
+
+
 class SourceResponse(BaseModel):
     """Source information response"""
     source_id: UUID

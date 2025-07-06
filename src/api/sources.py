@@ -19,7 +19,7 @@ import structlog
 from src.db.base import get_db_session
 from src.db.models import User, Source, SourceTool, Bot, UserBotAccess, BotSourceAssociation, SourceShare
 from src.auth.google_oauth import get_current_user
-from src.api.models import SourceCreate, SourceResponse, RefreshResponse, ErrorResponse
+from src.api.models import SourceCreate, SourceUpdate, SourceResponse, RefreshResponse, ErrorResponse
 from src.db.mcp_credentials import store_source_credentials, get_user_sources_with_credentials, MCPCredentialManager
 from src.db.tool_cache import ToolCacheService
 from src.agents.fast_mcp import FastMCPService
@@ -29,12 +29,6 @@ router = APIRouter()
 
 
 # Request/Response Models
-class SourceUpdate(BaseModel):
-    """Request to update a source"""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    instructions: Optional[str] = None
-    credentials: Optional[Dict[str, str]] = None
 
 class SourceWithStatusResponse(SourceResponse):
     """Source response with connection status"""
@@ -415,115 +409,161 @@ async def update_source(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """Update a source owned by the current user"""
-    
-    query = select(Source).where(
-        Source.source_id == source_id,
-        Source.owner_user_id == user.user_id
-    )
-    
-    result = await db.execute(query)
-    source = result.scalar_one_or_none()
-    
-    if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Source not found"
-        )
-    
-    # Capture original values
-    original_name = source.name
-    original_description = source.description
-    original_instructions = source.instructions
-    original_server_url = source.server_url
-    original_owner_user_id = source.owner_user_id
-    original_owner_bot_id = source.owner_bot_id
-    original_is_active = source.is_active
-    original_created_at = source.created_at
-    original_tools_cache_status = source.tools_cache_status
-    original_tools_last_cached_at = source.tools_last_cached_at
-    original_tools_cache_error = source.tools_cache_error
-    
-    # Update fields
-    updated_at = datetime.utcnow()
-    if source_data.name is not None:
-        source.name = source_data.name
-    if source_data.description is not None:
-        source.description = source_data.description
-    if source_data.instructions is not None:
-        source.instructions = source_data.instructions
-    
-    source.updated_at = updated_at
-    
-    # Update credentials if provided
-    credentials_updated = False
-    if source_data.credentials is not None:
-        try:
-            success = await store_source_credentials(
-                db=db,
-                source_id=source_id,
-                credentials=source_data.credentials
-            )
-            credentials_updated = success
-        except Exception as e:
-            logger.error("Failed to update source credentials", error=str(e))
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update source credentials"
-            )
-    
-    # If credentials were updated, mark tools for lazy refresh
-    if credentials_updated:
-        logger.info("Source credentials updated - tools will be refreshed on next use", 
-                   source_id=source_id)
-        # Update source to mark tools as pending refresh
-        source.tools_cache_status = "pending"
-        source.tools_cache_error = None
-    
-    await db.commit()
-    
-    # Use captured or updated values
-    final_name = source_data.name if source_data.name is not None else original_name
-    final_description = source_data.description if source_data.description is not None else original_description
-    final_instructions = source_data.instructions if source_data.instructions is not None else original_instructions
-    
-    # Get current tool information after update
-    cached_tools = []
-    cached_tool_count = 0
+    """Update a source owned by the current user (comprehensive update with sharing support)"""
     
     try:
-        tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id])
-        if tools_data:
-            cached_tools = [tool["name"] for tool in tools_data]
-            cached_tool_count = len(cached_tools)
+        # Get source
+        result = await db.execute(
+            select(Source).where(
+                Source.source_id == source_id,
+                Source.owner_user_id == user.user_id
+            )
+        )
+        source = result.scalar_one_or_none()
+        
+        if not source:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Source not found or access denied"
+            )
+        
+        # Extract ALL source attributes early to avoid greenlet issues
+        source_id_value = source.source_id
+        original_name = source.name
+        original_description = source.description
+        original_instructions = source.instructions
+        original_server_url = source.server_url
+        original_is_public = source.is_public
+        original_owner_user_id = source.owner_user_id
+        original_owner_bot_id = source.owner_bot_id
+        original_is_active = source.is_active
+        original_created_at = source.created_at
+        original_updated_at = source.updated_at
+        original_tools_cache_status = source.tools_cache_status
+        original_tools_last_cached_at = source.tools_last_cached_at
+        original_tools_cache_error = source.tools_cache_error
+        
+        # Track changes for response
+        updated_name = source_data.name if source_data.name is not None else original_name
+        updated_description = source_data.description if source_data.description is not None else original_description
+        updated_instructions = source_data.instructions if source_data.instructions is not None else original_instructions
+        updated_server_url = source_data.server_url if source_data.server_url is not None else original_server_url
+        updated_is_public = source_data.is_public if source_data.is_public is not None else original_is_public
+        
+        # Update basic fields
+        updated_at = datetime.now(timezone.utc)
+        if source_data.name is not None:
+            source.name = source_data.name
+        if source_data.description is not None:
+            source.description = source_data.description
+        if source_data.instructions is not None:
+            source.instructions = source_data.instructions
+        if source_data.server_url is not None:
+            source.server_url = source_data.server_url
+        if source_data.is_public is not None:
+            source.is_public = source_data.is_public
+        
+        source.updated_at = updated_at
+        
+        # Update credentials if provided
+        credentials_updated = False
+        if source_data.credentials is not None:
+            try:
+                from src.db.mcp_credentials import SimplifiedCredentialManager
+                
+                auth_headers = source_data.credentials.get("auth_headers", {})
+                success = await SimplifiedCredentialManager.store_source_auth(
+                    db=db,
+                    source_id=source_id_value,
+                    server_url=updated_server_url,
+                    auth_headers=auth_headers
+                )
+                credentials_updated = success
+                
+                if not success:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to update source credentials"
+                    )
+            except Exception as e:
+                logger.error("Failed to update source credentials", error=str(e))
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to update source credentials: {str(e)}"
+                )
+        
+        # Handle sharing updates
+        if source_data.shared_with_users is not None:
+            # Remove existing shares
+            await db.execute(
+                delete(SourceShare).where(SourceShare.source_id == source_id_value)
+            )
+            
+            # Add new shares
+            for shared_user_id in source_data.shared_with_users:
+                share = SourceShare(
+                    source_id=source_id_value,
+                    shared_with_user_id=shared_user_id,
+                    granted_by_user_id=user.user_id
+                )
+                db.add(share)
+        
+        # If credentials or server URL were updated, mark tools for refresh
+        if credentials_updated or source_data.server_url is not None:
+            logger.info("Source credentials or URL updated - tools will be refreshed on next use", 
+                       source_id=source_id_value)
+            source.tools_cache_status = "pending"
+            source.tools_cache_error = None
+        
+        await db.commit()
+        
+        # Get current tool information after update
+        cached_tools = []
+        cached_tool_count = 0
+        
+        try:
+            tools_data = await ToolCacheService.get_cached_tools_for_sources(db, [source_id_value])
+            if tools_data:
+                cached_tools = [tool["name"] for tool in tools_data]
+                cached_tool_count = len(cached_tools)
+        except Exception as e:
+            logger.warning("Failed to get cached tools for updated source", 
+                          source_id=source_id_value, error=str(e))
+        
+        logger.info("Source updated successfully", 
+                   source_id=source_id_value, 
+                   user_id=user.user_id,
+                   credentials_updated=credentials_updated)
+        
+        # Use tracked values instead of accessing model attributes after commit
+        return SourceResponse(
+            source_id=source_id_value,
+            name=updated_name,
+            description=updated_description,
+            instructions=updated_instructions,
+            server_url=updated_server_url,
+            owner_user_id=original_owner_user_id,
+            owner_bot_id=original_owner_bot_id,
+            is_public=updated_is_public,
+            is_active=original_is_active,
+            created_at=original_created_at,
+            updated_at=updated_at,
+            tools_cache_status=source.tools_cache_status if credentials_updated or source_data.server_url is not None else original_tools_cache_status,
+            tools_last_cached_at=original_tools_last_cached_at,
+            tools_cache_error=None if credentials_updated or source_data.server_url is not None else original_tools_cache_error,
+            cached_tool_count=cached_tool_count,
+            cached_tools=cached_tools
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning("Failed to get cached tools for updated source", 
-                      source_id=source_id, error=str(e))
-    
-    logger.info(
-        "Source updated",
-        source_id=source_id,
-        name=final_name,
-        owner_user_id=user.user_id
-    )
-    
-    return SourceResponse(
-        source_id=source_id,
-        name=final_name,
-        description=final_description,
-        instructions=final_instructions,
-        server_url=original_server_url,
-        owner_user_id=original_owner_user_id,
-        owner_bot_id=original_owner_bot_id,
-        is_active=original_is_active,
-        created_at=original_created_at,
-        updated_at=updated_at,
-        tools_cache_status=source_tools_cache_status,
-        tools_last_cached_at=source_tools_last_cached_at,
-        tools_cache_error=source_tools_cache_error,
-        cached_tool_count=cached_tool_count,
-        cached_tools=cached_tools
-    )
+        await db.rollback()
+        logger.error("Source update failed", error=str(e), source_id=source_id, user_id=user.user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update source: {str(e)}"
+        )
 
 
 @router.delete("/{source_id}")
