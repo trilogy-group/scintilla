@@ -387,30 +387,94 @@ class FastMCPAgent:
         
         return validated_messages
     
+    def _clean_conversation_sequence(self, messages: List[Any]) -> List[Any]:
+        """
+        Clean conversation sequence to ensure proper Human/AI alternation and remove incomplete messages.
+        This fixes the core issue causing empty responses.
+        """
+        if not messages:
+            return []
+        
+        cleaned_messages = []
+        last_msg_type = None
+        
+        for msg in messages:
+            msg_type = type(msg).__name__
+            
+            # Skip incomplete AI messages (ones that don't have proper tool calls/results)
+            if msg_type == 'AIMessage':
+                # If message has content and it looks like an incomplete response, skip it
+                if hasattr(msg, 'content'):
+                    content = str(msg.content)
+                    # Skip messages that are incomplete coverage guidance or partial responses
+                    if any(phrase in content for phrase in [
+                        "I've searched", "but should also check", "for comprehensive coverage",
+                        "I apologize, but after searching", "I don't have enough specific information",
+                        "Let me search", "for more information"
+                    ]):
+                        logger.info(f"Skipping incomplete AI message: {repr(content[:50])}")
+                        continue
+                
+                # Skip consecutive AIMessages (keep only the last one in a sequence)
+                if last_msg_type == 'AIMessage':
+                    # Replace the previous AIMessage with this one
+                    if cleaned_messages and type(cleaned_messages[-1]).__name__ == 'AIMessage':
+                        cleaned_messages[-1] = msg
+                        logger.info("Replaced consecutive AIMessage with newer one")
+                    else:
+                        cleaned_messages.append(msg)
+                else:
+                    cleaned_messages.append(msg)
+            
+            # Keep HumanMessages and ToolMessages as-is, but avoid consecutive HumanMessages
+            elif msg_type == 'HumanMessage':
+                if last_msg_type != 'HumanMessage':
+                    cleaned_messages.append(msg)
+                else:
+                    logger.info("Skipping consecutive HumanMessage")
+            
+            else:
+                # ToolMessage and other types
+                cleaned_messages.append(msg)
+            
+            last_msg_type = msg_type
+        
+        # Final validation: ensure we don't end with consecutive messages of same type
+        if len(cleaned_messages) >= 2:
+            # Remove trailing incomplete sequences
+            if (type(cleaned_messages[-1]).__name__ == type(cleaned_messages[-2]).__name__ and
+                type(cleaned_messages[-1]).__name__ in ['AIMessage', 'HumanMessage']):
+                cleaned_messages.pop(-2)
+                logger.info("Removed consecutive message from end of sequence")
+        
+        removed_count = len(messages) - len(cleaned_messages)
+        if removed_count > 0:
+            logger.warning(f"Cleaned conversation history: removed {removed_count} problematic messages")
+        
+        return cleaned_messages
+    
     def _clean_final_response(self, content: str) -> str:
         """
         Clean up final response content to remove leftover coverage guidance, 
-        iteration feedback, and other artifacts from failed queries
+        iteration feedback, and other artifacts from failed queries.
+        
+        BE CAREFUL: Only remove specific problematic patterns, not legitimate content.
         """
         import re
         
         if not isinstance(content, str):
             content = str(content)
         
-        # Remove iteration limit messages
-        content = re.sub(r'I searched extensively.*?Here\'s what I found with the available data:\s*', '', content, flags=re.DOTALL)
-        content = re.sub(r'I tried \d+ different search approaches.*?Here\'s what I found:\s*', '', content, flags=re.DOTALL)
-        content = re.sub(r'I reached the maximum number.*?Here\'s what I found:\s*', '', content, flags=re.DOTALL)
-        
-        # Remove coverage guidance messages
-        content = re.sub(r'I\'ve searched.*?for comprehensive coverage\.\s*', '', content, flags=re.DOTALL)
-        content = re.sub(r'Let me search.*?for more information\.\s*', '', content, flags=re.DOTALL)
-        content = re.sub(r'Let me search additional source types.*?\.\s*', '', content, flags=re.DOTALL)
-        
-        # Remove function call artifacts
+        # ONLY remove function call artifacts that shouldn't be in user responses
         content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL)
         content = re.sub(r'<invoke.*?</invoke>', '', content, flags=re.DOTALL)
         content = re.sub(r'<function_result>.*?</function_result>', '', content, flags=re.DOTALL)
+        
+        # Remove standalone coverage guidance messages (but NOT full explanations)
+        # Only remove short, standalone guidance messages like:
+        # "I've searched documentation but should also check tickets for comprehensive coverage."
+        content = re.sub(r'^I\'ve searched [^.]{1,50} but should also check [^.]{1,50} for comprehensive coverage\.\s*$', '', content, flags=re.MULTILINE)
+        content = re.sub(r'^Let me search additional source types to provide a complete answer\.\s*$', '', content, flags=re.MULTILINE)
         
         # Clean up multiple newlines and whitespace
         content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
@@ -1268,25 +1332,41 @@ Be intelligent about tool usage - search when information is needed, respond dir
             # Create final prompt with citation guidance - use conversation history instead of recreating tool results
             final_messages = [SystemMessage(content=system_prompt)]
             
-            # Filter out any SystemMessage objects from history to avoid multiple system messages
+            # Filter and clean conversation history to ensure proper Human/AI alternation
             filtered_history = [msg for msg in optimized_history if not isinstance(msg, SystemMessage)]
-            final_messages.extend(filtered_history)
-            final_messages.append(HumanMessage(content=message))
             
-            # Add citation guidance for markdown links
+            # Clean up conversation history - remove incomplete AI messages and fix alternation
+            cleaned_history = self._clean_conversation_sequence(filtered_history)
+            final_messages.extend(cleaned_history)
+            
+            # Combine user message with citation guidance in a single HumanMessage
+            user_content = message
             if citation_guidance:
-                citation_prompt = f"""Available sources for citations:
+                user_content += f"""
+
+Available sources for citations:
 
 {citation_guidance}
 
 IMPORTANT: Use markdown links exactly as shown above when citing these sources. Format: [Title](URL)"""
-                
-                final_messages.append(HumanMessage(content=citation_prompt))
+            
+            final_messages.append(HumanMessage(content=user_content))
             
             # CRITICAL: Validate final message sequence to prevent tool_use_id mismatches
             final_messages = self._validate_message_sequence_for_claude(final_messages)
             
             # Get final response with proper citations (with timeout handling)
+            # DEBUG: Log what's being sent to final LLM call
+            logger.info(f"🔍 FINAL LLM CALL DEBUG - Message count: {len(final_messages)}")
+            for i, msg in enumerate(final_messages):
+                msg_type = type(msg).__name__
+                content_preview = str(msg.content)[:100] if hasattr(msg, 'content') else "no content"
+                logger.info(f"  Message {i}: {msg_type} - {repr(content_preview)}")
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    logger.info(f"    Tool calls: {len(msg.tool_calls)}")
+                if hasattr(msg, 'tool_call_id'):
+                    logger.info(f"    Tool call ID: {msg.tool_call_id}")
+            
             final_llm_start = time.time()
             try:
                 final_response = await llm.ainvoke(final_messages)
@@ -1306,8 +1386,8 @@ IMPORTANT: Use markdown links exactly as shown above when citing these sources. 
                 else:
                     final_content = str(final_response.content)
                 
-                # Clean up any leftover coverage guidance or iteration feedback from stale conversations
-                final_content = self._clean_final_response(final_content)
+                # TEMPORARILY DISABLE CLEANUP TO DEBUG EMPTY CONTENT ISSUE
+                # final_content = self._clean_final_response(final_content)
             except asyncio.TimeoutError:
                 # Handle timeout gracefully with a fallback response
                 final_llm_end = time.time()
